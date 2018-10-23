@@ -412,6 +412,14 @@ static int lfs_fs_relocate(lfs_t *lfs,
         const lfs_block_t oldpair[2], lfs_block_t newpair[2]);
 static int lfs_fs_forceconsistency(lfs_t *lfs);
 static int lfs_deinit(lfs_t *lfs);
+#ifdef LFS_UPGRADEV1
+static int lfs1_traverse(lfs_t *lfs,
+        int (*cb)(void*, lfs_block_t), void *data);
+static int lfs1_moved(lfs_t *lfs, const void *e);
+static int lfs1_mount(lfs_t *lfs, const struct lfs_config *cfg,
+        struct lfs1 *lfs1);
+static int lfs1_upgrade(lfs_t *lfs);
+#endif
 
 
 /// Block allocator ///
@@ -3141,6 +3149,9 @@ static int lfs_init(lfs_t *lfs, const struct lfs_config *cfg) {
     lfs->seed = 0;
     lfs_global_zero(&lfs->globals);
     lfs_global_zero(&lfs->locals);
+#ifdef LFS_UPGRADEV1
+    lfs->lfs1 = NULL;
+#endif
 
     return 0;
 
@@ -3347,6 +3358,31 @@ int lfs_mount(lfs_t *lfs, const struct lfs_config *cfg) {
 
 cleanup:
     lfs_unmount(lfs);
+
+#ifdef LFS_UPGRADEV1
+    // failed to mount, try v1?
+    struct lfs1 lfs1;
+    err = lfs1_mount(lfs, cfg, &lfs1);
+    if (err) {
+        return err;
+    }
+
+    // mounted v1, try to upgrade?
+    err = lfs1_upgrade(lfs);
+    if (err) {
+        lfs_unmount(lfs);
+        return err;
+    }
+
+    // upgrade complete, unmount v1, try to mount v2 again
+    err = lfs_unmount(lfs);
+    if (err) {
+        return err;
+    }
+
+    err = lfs_mount(lfs, cfg);
+#endif
+
     return err;
 }
 
@@ -3360,6 +3396,20 @@ int lfs_fs_traverse(lfs_t *lfs,
         int (*cb)(void *data, lfs_block_t block), void *data) {
     // iterate over metadata pairs
     lfs_mdir_t dir = {.tail = {0, 1}};
+
+#ifdef LFS_UPGRADEV1
+    // also consider in-flight upgrades
+    if (lfs->lfs1) {
+        int err = lfs1_traverse(lfs, cb, data);
+        if (err) {
+            return err;
+        }
+
+        dir.tail[0] = lfs->root[0];
+        dir.tail[1] = lfs->root[1];
+    }
+#endif
+
     while (!lfs_pair_isnull(dir.tail)) {
         for (int i = 0; i < 2; i++) {
             int err = cb(data, dir.tail[i]);
@@ -3674,3 +3724,655 @@ lfs_ssize_t lfs_fs_size(lfs_t *lfs) {
 
     return size;
 }
+
+
+/// littlefs v1 logic for upgrades ///
+#ifdef LFS_UPGRADEV1
+
+/// Version info ///
+
+// Software library version
+// Major (top-nibble), incremented on backwards incompatible changes
+// Minor (bottom-nibble), incremented on feature additions
+#define LFS1_VERSION 0x00010007
+#define LFS1_VERSION_MAJOR (0xffff & (LFS1_VERSION >> 16))
+#define LFS1_VERSION_MINOR (0xffff & (LFS1_VERSION >>  0))
+
+// Version of On-disk data structures
+// Major (top-nibble), incremented on backwards incompatible changes
+// Minor (bottom-nibble), incremented on feature additions
+#define LFS1_DISK_VERSION 0x00010001
+#define LFS1_DISK_VERSION_MAJOR (0xffff & (LFS1_DISK_VERSION >> 16))
+#define LFS1_DISK_VERSION_MINOR (0xffff & (LFS1_DISK_VERSION >>  0))
+
+
+/// v1 Definitions ///
+
+// File types
+enum lfs1_type {
+    LFS1_TYPE_REG        = 0x11,
+    LFS1_TYPE_DIR        = 0x22,
+    LFS1_TYPE_SUPERBLOCK = 0x2e,
+};
+
+typedef struct lfs1_entry {
+    lfs_off_t off;
+
+    struct lfs1_disk_entry {
+        uint8_t type;
+        uint8_t elen;
+        uint8_t alen;
+        uint8_t nlen;
+        union {
+            struct {
+                lfs_block_t head;
+                lfs_size_t size;
+            } file;
+            lfs_block_t dir[2];
+        } u;
+    } d;
+} lfs1_entry_t;
+
+typedef struct lfs1_dir {
+    struct lfs1_dir *next;
+    lfs_block_t pair[2];
+    lfs_off_t off;
+
+    lfs_block_t head[2];
+    lfs_off_t pos;
+
+    struct lfs1_disk_dir {
+        uint32_t rev;
+        lfs_size_t size;
+        lfs_block_t tail[2];
+    } d;
+} lfs1_dir_t;
+
+typedef struct lfs1_superblock {
+    lfs_off_t off;
+
+    struct lfs1_disk_superblock {
+        uint8_t type;
+        uint8_t elen;
+        uint8_t alen;
+        uint8_t nlen;
+        lfs_block_t root[2];
+        uint32_t block_size;
+        uint32_t block_count;
+        uint32_t version;
+        char magic[8];
+    } d;
+} lfs1_superblock_t;
+
+
+/// Low-level wrappers v1->v2 ///
+void lfs1_crc(uint32_t *crc, const void *buffer, size_t size) {
+    *crc = lfs_crc(*crc, buffer, size);
+}
+
+static int lfs1_bd_read(lfs_t *lfs, lfs_block_t block,
+        lfs_off_t off, void *buffer, lfs_size_t size) {
+    // if we ever do more than writes to alternating pairs,
+    // this may need to consider pcache
+    return lfs_bd_read(lfs, &lfs->pcache, &lfs->rcache, size,
+            block, off, buffer, size);
+}
+
+static int lfs1_bd_crc(lfs_t *lfs, lfs_block_t block,
+        lfs_off_t off, lfs_size_t size, uint32_t *crc) {
+    for (lfs_off_t i = 0; i < size; i++) {
+        uint8_t c;
+        int err = lfs1_bd_read(lfs, block, off+i, &c, 1);
+        if (err) {
+            return err;
+        }
+
+        lfs1_crc(crc, &c, 1);
+    }
+
+    return 0;
+}
+
+
+/// Endian swapping functions ///
+static void lfs1_dir_fromle32(struct lfs1_disk_dir *d) {
+    d->rev     = lfs_fromle32(d->rev);
+    d->size    = lfs_fromle32(d->size);
+    d->tail[0] = lfs_fromle32(d->tail[0]);
+    d->tail[1] = lfs_fromle32(d->tail[1]);
+}
+
+static void lfs1_dir_tole32(struct lfs1_disk_dir *d) {
+    d->rev     = lfs_tole32(d->rev);
+    d->size    = lfs_tole32(d->size);
+    d->tail[0] = lfs_tole32(d->tail[0]);
+    d->tail[1] = lfs_tole32(d->tail[1]);
+}
+
+static void lfs1_entry_fromle32(struct lfs1_disk_entry *d) {
+    d->u.dir[0] = lfs_fromle32(d->u.dir[0]);
+    d->u.dir[1] = lfs_fromle32(d->u.dir[1]);
+}
+
+static void lfs1_superblock_fromle32(struct lfs1_disk_superblock *d) {
+    d->root[0]     = lfs_fromle32(d->root[0]);
+    d->root[1]     = lfs_fromle32(d->root[1]);
+    d->block_size  = lfs_fromle32(d->block_size);
+    d->block_count = lfs_fromle32(d->block_count);
+    d->version     = lfs_fromle32(d->version);
+}
+
+
+///// Metadata pair and directory operations ///
+static inline lfs_size_t lfs1_entry_size(const lfs1_entry_t *entry) {
+    return 4 + entry->d.elen + entry->d.alen + entry->d.nlen;
+}
+
+static int lfs1_dir_fetch(lfs_t *lfs,
+        lfs1_dir_t *dir, const lfs_block_t pair[2]) {
+    // copy out pair, otherwise may be aliasing dir
+    const lfs_block_t tpair[2] = {pair[0], pair[1]};
+    bool valid = false;
+
+    // check both blocks for the most recent revision
+    for (int i = 0; i < 2; i++) {
+        struct lfs1_disk_dir test;
+        int err = lfs1_bd_read(lfs, tpair[i], 0, &test, sizeof(test));
+        lfs1_dir_fromle32(&test);
+        if (err) {
+            if (err == LFS_ERR_CORRUPT) {
+                continue;
+            }
+            return err;
+        }
+
+        if (valid && lfs_scmp(test.rev, dir->d.rev) < 0) {
+            continue;
+        }
+
+        if ((0x7fffffff & test.size) < sizeof(test)+4 ||
+            (0x7fffffff & test.size) > lfs->cfg->block_size) {
+            continue;
+        }
+
+        uint32_t crc = 0xffffffff;
+        lfs1_dir_tole32(&test);
+        lfs1_crc(&crc, &test, sizeof(test));
+        lfs1_dir_fromle32(&test);
+        err = lfs1_bd_crc(lfs, tpair[i], sizeof(test),
+                (0x7fffffff & test.size) - sizeof(test), &crc);
+        if (err) {
+            if (err == LFS_ERR_CORRUPT) {
+                continue;
+            }
+            return err;
+        }
+
+        if (crc != 0) {
+            continue;
+        }
+
+        valid = true;
+
+        // setup dir in case it's valid
+        dir->pair[0] = tpair[(i+0) % 2];
+        dir->pair[1] = tpair[(i+1) % 2];
+        dir->off = sizeof(dir->d);
+        dir->d = test;
+    }
+
+    if (!valid) {
+        LFS_ERROR("Corrupted dir pair at %" PRIu32 " %" PRIu32 ,
+                tpair[0], tpair[1]);
+        return LFS_ERR_CORRUPT;
+    }
+
+    return 0;
+}
+
+static int lfs1_dir_next(lfs_t *lfs, lfs1_dir_t *dir, lfs1_entry_t *entry) {
+    while (dir->off + sizeof(entry->d) > (0x7fffffff & dir->d.size)-4) {
+        if (!(0x80000000 & dir->d.size)) {
+            entry->off = dir->off;
+            return LFS_ERR_NOENT;
+        }
+
+        int err = lfs1_dir_fetch(lfs, dir, dir->d.tail);
+        if (err) {
+            return err;
+        }
+
+        dir->off = sizeof(dir->d);
+        dir->pos += sizeof(dir->d) + 4;
+    }
+
+    int err = lfs1_bd_read(lfs, dir->pair[0], dir->off,
+            &entry->d, sizeof(entry->d));
+    lfs1_entry_fromle32(&entry->d);
+    if (err) {
+        return err;
+    }
+
+    entry->off = dir->off;
+    dir->off += lfs1_entry_size(entry);
+    dir->pos += lfs1_entry_size(entry);
+    return 0;
+}
+
+
+/// Filesystem operations ///
+static int lfs1_mount(lfs_t *lfs, const struct lfs_config *cfg,
+        struct lfs1 *lfs1) {
+    int err = 0;
+    if (true) {
+        err = lfs_init(lfs, cfg);
+        if (err) {
+            return err;
+        }
+
+        lfs->lfs1 = lfs1;
+        lfs->lfs1->root[0] = 0xffffffff;
+        lfs->lfs1->root[1] = 0xffffffff;
+
+        // setup free lookahead
+        lfs->free.off = 0;
+        lfs->free.size = 0;
+        lfs->free.i = 0;
+        lfs_alloc_ack(lfs);
+
+        // load superblock
+        lfs1_dir_t dir;
+        lfs1_superblock_t superblock;
+        err = lfs1_dir_fetch(lfs, &dir, (const lfs_block_t[2]){0, 1});
+        if (err && err != LFS_ERR_CORRUPT) {
+            goto cleanup;
+        }
+
+        if (!err) {
+            err = lfs1_bd_read(lfs, dir.pair[0], sizeof(dir.d),
+                    &superblock.d, sizeof(superblock.d));
+            lfs1_superblock_fromle32(&superblock.d);
+            if (err) {
+                goto cleanup;
+            }
+
+            lfs->lfs1->root[0] = superblock.d.root[0];
+            lfs->lfs1->root[1] = superblock.d.root[1];
+        }
+
+        if (err || memcmp(superblock.d.magic, "littlefs", 8) != 0) {
+            LFS_ERROR("Invalid superblock at %d %d", 0, 1);
+            err = LFS_ERR_CORRUPT;
+            goto cleanup;
+        }
+
+        uint16_t major_version = (0xffff & (superblock.d.version >> 16));
+        uint16_t minor_version = (0xffff & (superblock.d.version >>  0));
+        if ((major_version != LFS1_DISK_VERSION_MAJOR ||
+             minor_version > LFS1_DISK_VERSION_MINOR)) {
+            LFS_ERROR("Invalid version %d.%d", major_version, minor_version);
+            err = LFS_ERR_INVAL;
+            goto cleanup;
+        }
+
+        return 0;
+    }
+
+cleanup:
+    lfs_deinit(lfs);
+    return err;
+}
+
+
+/// littlefs v1 specific operations ///
+int lfs1_traverse(lfs_t *lfs, int (*cb)(void*, lfs_block_t), void *data) {
+    if (lfs_pair_isnull(lfs->lfs1->root)) {
+        return 0;
+    }
+
+    // iterate over metadata pairs
+    lfs1_dir_t dir;
+    lfs1_entry_t entry;
+    lfs_block_t cwd[2] = {0, 1};
+
+    while (true) {
+        for (int i = 0; i < 2; i++) {
+            int err = cb(data, cwd[i]);
+            if (err) {
+                return err;
+            }
+        }
+
+        int err = lfs1_dir_fetch(lfs, &dir, cwd);
+        if (err) {
+            return err;
+        }
+
+        // iterate over contents
+        while (dir.off + sizeof(entry.d) <= (0x7fffffff & dir.d.size)-4) {
+            err = lfs1_bd_read(lfs, dir.pair[0], dir.off,
+                    &entry.d, sizeof(entry.d));
+            lfs1_entry_fromle32(&entry.d);
+            if (err) {
+                return err;
+            }
+
+            dir.off += lfs1_entry_size(&entry);
+            if ((0x70 & entry.d.type) == (0x70 & LFS1_TYPE_REG)) {
+                err = lfs_ctz_traverse(lfs, NULL, &lfs->rcache,
+                        entry.d.u.file.head, entry.d.u.file.size, cb, data);
+                if (err) {
+                    return err;
+                }
+            }
+        }
+
+        cwd[0] = dir.d.tail[0];
+        cwd[1] = dir.d.tail[1];
+
+        if (lfs_pair_isnull(cwd)) {
+            break;
+        }
+    }
+
+    return 0;
+}
+
+static int lfs1_moved(lfs_t *lfs, const void *e) {
+    if (lfs_pair_isnull(lfs->lfs1->root)) {
+        return 0;
+    }
+
+    // skip superblock
+    lfs1_dir_t cwd;
+    int err = lfs1_dir_fetch(lfs, &cwd, (const lfs_block_t[2]){0, 1});
+    if (err) {
+        return err;
+    }
+
+    // iterate over all directory directory entries
+    lfs1_entry_t entry;
+    while (!lfs_pair_isnull(cwd.d.tail)) {
+        err = lfs1_dir_fetch(lfs, &cwd, cwd.d.tail);
+        if (err) {
+            return err;
+        }
+
+        while (true) {
+            err = lfs1_dir_next(lfs, &cwd, &entry);
+            if (err && err != LFS_ERR_NOENT) {
+                return err;
+            }
+
+            if (err == LFS_ERR_NOENT) {
+                break;
+            }
+
+            if (!(0x80 & entry.d.type) &&
+                 memcmp(&entry.d.u, e, sizeof(entry.d.u)) == 0) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/// v1 upgrade functions ///
+static int lfs1_upgrade_finddirv1(lfs_t *lfs, lfs_block_t pair[2],
+        lfs_off_t *i) {
+    // iterate over all directory directory entries
+    *i = 0;
+    lfs1_dir_t dir1;
+    dir1.d.tail[0] = lfs->lfs1->root[0];
+    dir1.d.tail[1] = lfs->lfs1->root[1];
+    lfs_off_t ni = 0;
+    while (lfs_pair_cmp(dir1.d.tail, pair) != 0) {
+        int err = lfs1_dir_fetch(lfs, &dir1, dir1.d.tail);
+        if (err) {
+            return err;
+        }
+
+        while (true) {
+            lfs1_entry_t entry;
+            err = lfs1_dir_next(lfs, &dir1, &entry);
+            if (err && err != LFS_ERR_NOENT) {
+                return err;
+            }
+
+            if (err == LFS_ERR_NOENT) {
+                break;
+            }
+        }
+
+        ni += 1;
+    }
+
+    *i = ni;
+    return 0;
+}
+
+static int lfs1_upgrade_getdirv2(lfs_t *lfs, lfs_mdir_t *dir2, lfs_off_t i) {
+    // iterate through i metadata-pairs
+    dir2->tail[0] = lfs->root[0];
+    dir2->tail[1] = lfs->root[1];
+    for (lfs_off_t ni = 0; ni < i; ni++) {
+        while (true) {
+            int err = lfs_dir_fetch(lfs, dir2, dir2->tail);
+            if (err) {
+                return err;
+            }
+
+            if (!dir2->split) {
+                break;
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Upgrade from v1 to v2 of littlefs, assumes lfs is mounted as v1 will
+// create v2 metadata similar to lfs_format
+static int lfs1_upgrade(lfs_t *lfs) {
+    // create new directories
+    lfs_mdir_t pdir2;
+    lfs1_dir_t dir1;
+    dir1.d.tail[0] = lfs->lfs1->root[0];
+    dir1.d.tail[1] = lfs->lfs1->root[1];
+    lfs_off_t i = 0;
+    while (!lfs_pair_isnull(dir1.d.tail)) {
+        int err = lfs1_dir_fetch(lfs, &dir1, dir1.d.tail);
+        if (err) {
+            return err;
+        }
+
+        while (true) {
+            lfs1_entry_t entry;
+            err = lfs1_dir_next(lfs, &dir1, &entry);
+            if (err && err != LFS_ERR_NOENT) {
+                return err;
+            }
+
+            if (err == LFS_ERR_NOENT) {
+                break;
+            }
+        }
+
+        lfs_mdir_t dir2;
+        err = lfs_dir_alloc(lfs, &dir2);
+        if (err) {
+            return err;
+        }
+
+        if (i != 0) {
+            pdir2.tail[0] = dir2.pair[0];
+            pdir2.tail[1] = dir2.pair[1];
+            err = lfs_dir_commit(lfs, &pdir2,
+                    LFS_MKATTR(LFS_TYPE_HARDTAIL, 0x1ff,
+                        pdir2.tail, sizeof(pdir2.tail),
+                    NULL));
+            if (err) {
+                return err;
+            }
+        } else {
+            lfs->root[0] = dir2.pair[0];
+            lfs->root[1] = dir2.pair[1];
+        }
+
+        pdir2 = dir2;
+        i += 1;
+    }
+
+    // iterate over all directory directory entries and copy over metadata
+    // to new directories
+    dir1.d.tail[0] = lfs->lfs1->root[0];
+    dir1.d.tail[1] = lfs->lfs1->root[1];
+    i = 0;
+    while (!lfs_pair_isnull(dir1.d.tail)) {
+        int err = lfs1_dir_fetch(lfs, &dir1, dir1.d.tail);
+        if (err) {
+            return err;
+        }
+
+        while (true) {
+            lfs1_entry_t entry;
+            err = lfs1_dir_next(lfs, &dir1, &entry);
+            if (err && err != LFS_ERR_NOENT) {
+                return err;
+            }
+
+            if (err == LFS_ERR_NOENT) {
+                break;
+            }
+
+            // check that entry has not been moved
+            if (entry.d.type & 0x80) {
+                int moved = lfs1_moved(lfs, &entry.d.u);
+                if (moved < 0) {
+                    return moved;
+                }
+
+                if (moved) {
+                    continue;
+                }
+
+                entry.d.type &= ~0x80;
+            }
+
+            // fetch new directory
+            lfs_mdir_t dir2;
+            err = lfs1_upgrade_getdirv2(lfs, &dir2, i);
+            if (err) {
+                return err;
+            }
+
+            // read name and find new id to set
+            char name[LFS_NAME_MAX+1];
+            err = lfs1_bd_read(lfs, dir1.pair[0],
+                    entry.off + 4+entry.d.elen+entry.d.alen,
+                    name, entry.d.nlen);
+            if (err) {
+                return err;
+            }
+
+            uint16_t id;
+            lfs_stag_t tag = lfs_dir_find(lfs, &dir2,
+                    &(const char*){name}, &id);
+            if (tag != LFS_ERR_NOENT) {
+                return (tag < 0) ? tag : LFS_ERR_EXIST;
+            }
+
+            // copy over entry info
+            if ((0x70 & entry.d.type) == (0x70 & LFS1_TYPE_REG)) {
+                struct lfs_ctz ctz;
+                err = lfs1_bd_read(lfs, dir1.pair[0],
+                        entry.off + 4, &ctz, 8);
+                if (err) {
+                    return err;
+                }
+
+                err = lfs_dir_commit(lfs, &dir2,
+                        LFS_MKATTR(LFS_TYPE_CTZSTRUCT, id, &ctz, 8,
+                        LFS_MKATTR(LFS_TYPE_REG, id, name, entry.d.nlen,
+                        NULL)));
+                if (err) {
+                    return err;
+                }
+            } else if ((0x70 & entry.d.type) == (0x70 & LFS1_TYPE_DIR)) {
+                lfs_block_t pair[2];
+                err = lfs1_bd_read(lfs, dir1.pair[0],
+                        entry.off + 4, pair, 8);
+                if (err) {
+                    return err;
+                }
+
+                lfs_off_t no;
+                err = lfs1_upgrade_finddirv1(lfs, pair, &no);
+                if (err) {
+                    return err;
+                }
+
+                lfs_mdir_t ndir2;
+                err = lfs1_upgrade_getdirv2(lfs, &ndir2, no);
+                if (err) {
+                    return err;
+                }
+
+                err = lfs_dir_commit(lfs, &dir2,
+                        LFS_MKATTR(LFS_TYPE_DIRSTRUCT, id, pair, 8,
+                        LFS_MKATTR(LFS_TYPE_DIR, id, name, entry.d.nlen,
+                        NULL)));
+                if (err) {
+                    return err;
+                }
+            } else {
+                LFS_ASSERT(false);
+            }
+        }
+
+        i += 1;
+    }
+
+    int err = lfs1_dir_fetch(lfs, &dir1, (const lfs_block_t[2]){0, 1});
+    if (err) {
+        return err;
+    }
+
+    // create superblock
+    lfs_mdir_t dir2;
+    dir2.pair[0] = dir1.pair[0];
+    dir2.pair[1] = dir1.pair[1];
+    dir2.rev = dir1.d.rev;
+    dir2.off = sizeof(dir2.rev);
+    dir2.etag = 0xffffffff;
+    dir2.count = 0;
+    dir2.tail[0] = lfs->root[0];
+    dir2.tail[1] = lfs->root[1];
+    dir2.erased = false;
+    dir2.split = false;
+
+    lfs_superblock_t superblock = {
+        .version = LFS_DISK_VERSION,
+        .block_size = lfs->cfg->block_size,
+        .block_count = lfs->cfg->block_count,
+        .name_max = lfs->name_max,
+        .inline_max = lfs->inline_max,
+        .attr_max = lfs->attr_max,
+        .file_max = lfs->file_max,
+    };
+
+    lfs_superblock_tole32(&superblock);
+    err = lfs_dir_commit(lfs, &dir2,
+            LFS_MKATTR(LFS_TYPE_INLINESTRUCT, 0,
+                &superblock, sizeof(superblock),
+            LFS_MKATTR(LFS_TYPE_SUPERBLOCK, 0, "littlefs", 8,
+            NULL)));
+    if (err) {
+        return err;
+    }
+
+    return false;
+}
+
+#endif

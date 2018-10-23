@@ -398,6 +398,12 @@ typedef struct lfs {
     lfs_size_t inline_max;
     lfs_size_t attr_max;
     lfs_size_t file_max;
+
+#ifdef LFS_UPGRADEV1
+    struct lfs1 {
+        lfs_block_t root[2];
+    } *lfs1;
+#endif
 } lfs_t;
 
 
