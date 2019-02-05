@@ -232,43 +232,45 @@ invalid and can be used for null values.
 
 Metadata tag fields:
 
-- | valid bit | 1-bit   | 0-1    |
-  |-----------|---------|--------|
+- | valid bit | 1-bit   |
+  |-----------|---------|
 
   Indicates if the tag is valid.
 
-- | type3     | 11-bits | 1-2047 | `0x000` = invalid |
-  |-----------|---------|--------|-------------------|
+- | type3     | 11-bits | `0x000` = invalid |
+  |-----------|---------|-------------------|
 
   Type of the tag. This field is broken down further into a 3-bit abstract
   type and an 8-bit chunk field. Note that the value `0x000` is invalid and
   not assigned a type.
 
-- | type1     | 3-bits  | 0-7    |
-  |-----------|---------|--------|
+- | type1     | 3-bits  |
+  |-----------|---------|
 
   Abstract type of the tag. Groups the tags into 8 categories that facilitate
   bitmasked lookups.
 
-- | chunk     | 8-bits  | 0-255  |
-  |-----------|---------|--------|
+- | chunk     | 8-bits  |
+  |-----------|---------|
 
   Chunk field used for various purposes by the different abstract types.
   type1+chunk+id form a unique identifier for each tag in the metadata block.
 
-- | id        | 10-bits | 0-1022 | `0x3ff` = no id |
-  |-----------|---------|--------|-----------------|
+- | id        | 10-bits | `0x3ff` = no id |
+  |-----------|---------|-----------------|
 
   File id associated with the tag. Each file in a metadata block gets a unique
   id which is used to associate tags with that file. The special value `0x3ff`
   is used for any tags that are not associated with a file, such as directory
   and global metadata.
 
-- | length    | 10-bits | 0-1022 | `0x3ff` = delete |
-  |-----------|---------|--------|------------------|
+- | length    | 10-bits | `0x3ff` = delete |
+  |-----------|---------|------------------|
 
   Length of the data in bytes. The special value `0x3ff` indicates that this
   tag has been deleted.
+
+## Metadata types
 
 Each metadata tag falls into one of 7 abstract types:
 
@@ -282,45 +284,53 @@ Each metadata tag falls into one of 7 abstract types:
 | `0x7xx`  | LFS_TYPE_GSTATE | Global state                      |
 | `0x5xx`  | LFS_TYPE_CRC    | CRC for the current commit        |
 
-Here is an exhaustive list of all currently used metadata tags in littlefs:
+What follows is an exhaustive list of metadata in littlefs.
 
-- | `0x401` | LFS_TYPE_CREATE       |
-  |---------|-----------------------|
+#### `0x401` LFS_TYPE_CREATE
 
-- | `0x4ff` | LFS_TYPE_DELETE       |
-  |---------|-----------------------|
+Creates a new file with this id. Note that files in a metadata block
+don't necessarily need a create tag. All a create does is move over any
+files using this id. In this sense a create is similar to insertion into
+an ephemeral array of files.
 
-- | `0x002` | LFS_TYPE_DIR          |
-  |---------|-----------------------|
+The create and delete tags allow littlefs to keep files in a directory
+ordered alphabetically by filename.
 
-- | `0x001` | LFS_TYPE_REG          |
-  |---------|-----------------------|
+#### `0x4ff` LFS_TYPE_DELETE
 
-- | `0x0ff` | LFS_TYPE_SUPERBLOCK   |
-  |---------|-----------------------|
+Deletes the file with this id. An inverse to create, this tag moves over
+any files neighboring this id similar to a deletion from an ephemeral
+array of files.
 
-- | `0x200` | LFS_TYPE_DIRSTRUCT    |
-  |---------|-----------------------|
+#### `0x002` LFS_TYPE_DIR
 
-- | `0x201` | LFS_TYPE_INLINESTRUCT |
-  |---------|-----------------------|
+Marks an id as a directory. 
 
-- | `0x202` | LFS_TYPE_CTZSTRUCT    |
-  |---------|-----------------------|
+#### `0x001` LFS_TYPE_REG
 
-- | `0x3xx` | LFS_TYPE_USERATTR     |
-  |---------|-----------------------|
+Marks an id as a regular file.
 
-- | `0x600` | LFS_TYPE_SOFTTAIL     |
-  |---------|-----------------------|
+#### `0x0ff` LFS_TYPE_SUPERBLOCK
 
-- | `0x7ff` | LFS_TYPE_MOVESTATE    |
-  |---------|-----------------------|
+Marks an id as a superblock entry.
 
-- | `0x5xx` | LFS_TYPE_CRC          |
-  |---------|-----------------------|
+#### `0x200` LFS_TYPE_DIRSTRUCT
+
+#### `0x201` LFS_TYPE_INLINESTRUCT
+
+#### `0x202` LFS_TYPE_CTZSTRUCT
+
+#### `0x3xx` LFS_TYPE_USERATTR
+
+#### `0x600` LFS_TYPE_SOFTTAIL
+
+#### `0x7ff` LFS_TYPE_MOVESTATE
+
+#### `0x5xx` LFS_TYPE_CRC
 
 
+
+# TODO RM below me
 
 
 
