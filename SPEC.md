@@ -28,9 +28,10 @@ out [DESIGN.md](DESIGN.md).
 
 - By default, any values in littlefs are stored in little-endian byte order.
 
-- The littlefs uses the value of 0xffffffff to represent a null block address.
+- The littlefs uses the value of `0xffffffff` to represent a null
+  block address.
 
-## Metadata pairs
+## Directories / Metadata pairs
 
 Metadata pairs form the backbone of the littlefs and provide a system for
 distributed atomic updates. Even the superblock is stored in a metadata pair.
@@ -109,7 +110,7 @@ blob of data. But exactly how these tags are stored is a little bit tricky.
 
 Metadata blocks support both forward and backward iteration. In order to do
 this without duplicating the space for each tag, neighboring entries have their
-tags XORed together, starting with 0xffffffff.
+tags XORed together, starting with `0xffffffff`.
 
 ```
  Forward iteration                        Backward iteration
@@ -222,7 +223,7 @@ Before we go further, there's one VERY important thing to note. These tags are
 NOT stored in little-endian. Tags stored in commits are actually stored in
 big-endian (and is the only thing in littlefs stored in big-endian). This
 little bit of craziness comes from the fact that the valid bit must be the
-FIRST bit in a commit, and when converted to little-endian, the valid bit finds
+first bit in a commit, and when converted to little-endian, the valid bit finds
 itself in byte 4. We could restructure the tag to store the valid bit lower,
 but, because none of the fields are byte-aligned, this would be more
 complicated than just storing the tag in big-endian.
@@ -272,17 +273,20 @@ Metadata tag fields:
 
 ## Metadata types
 
+<!--
 Each metadata tag falls into one of 7 abstract types:
 
-| Encoding | Name            | Description                       |
-|----------|-----------------|-----------------------------------|
-| `0x4xx`  | LFS_TYPE_SPLICE | Creation/deletion of files        |
-| `0x0xx`  | LFS_TYPE_NAME   | Name and type of file             |
-| `0x2xx`  | LFS_TYPE_STRUCT | File data structure               |
-| `0x3xx`  | LFS_TYPE_ATTR   | User attributes                   |
-| `0x6xx`  | LFS_TYPE_TAIL   | Tail field for this metadata pair |
-| `0x7xx`  | LFS_TYPE_GSTATE | Global state                      |
-| `0x5xx`  | LFS_TYPE_CRC    | CRC for the current commit        |
+<!-- | Encoding | Name              | Description                       | -->
+<!-- |----------|-------------------|-----------------------------------| -->
+<!-- | `0x4xx`  | LFS_TYPE_SPLICE   | Creation/deletion of files        | -->
+<!-- | `0x0xx`  | LFS_TYPE_NAME     | Name and type of file             | -->
+<!-- | `0x2xx`  | LFS_TYPE_STRUCT   | File data structure               | -->
+<!-- | `0x3xx`  | LFS_TYPE_USERATTR | User attributes                   | -->
+<!-- | `0x6xx`  | LFS_TYPE_TAIL     | Tail field for this metadata pair | -->
+<!-- | `0x7xx`  | LFS_TYPE_GSTATE   | Global state                      | -->
+<!-- | `0x5xx`  | LFS_TYPE_CRC      | CRC for the current commit        | -->
+
+-->
 
 What follows is an exhaustive list of metadata in littlefs.
 
@@ -291,7 +295,7 @@ What follows is an exhaustive list of metadata in littlefs.
 Creates a new file with this id. Note that files in a metadata block
 don't necessarily need a create tag. All a create does is move over any
 files using this id. In this sense a create is similar to insertion into
-an ephemeral array of files.
+an imaginary array of files.
 
 The create and delete tags allow littlefs to keep files in a directory
 ordered alphabetically by filename.
@@ -299,20 +303,49 @@ ordered alphabetically by filename.
 #### `0x4ff` LFS_TYPE_DELETE
 
 Deletes the file with this id. An inverse to create, this tag moves over
-any files neighboring this id similar to a deletion from an ephemeral
+any files neighboring this id similar to a deletion from an imaginary
 array of files.
 
-#### `0x002` LFS_TYPE_DIR
+#### `0x0xx` LFS_TYPE_NAME
 
-Marks an id as a directory. 
+Associates the id with a file name and file type. 
+
+The data contains the file name stored as an ASCII string (may be expanded to
+UTF8 in the future).
+
+The chunk field in this tag indicates an 8-bit file type which can be one of
+the following.
+
+Currently, the name tag must precede any other tags associated with the id and
+can not be reassigned without deleting the file.
 
 #### `0x001` LFS_TYPE_REG
 
-Marks an id as a regular file.
+Initializes the id + name as a regular file.
+
+How each file is stored depends on its struct tag, which is described below.
+
+#### `0x002` LFS_TYPE_DIR
+
+Initializes the id + name as a directory.
+
+Directories in littlefs are stored on disk as a linked-list of metadata pairs,
+each pair containing any number of files in alphabetical order. A pointer to
+the directory is stored in the struct tag, which is described below.
 
 #### `0x0ff` LFS_TYPE_SUPERBLOCK
 
-Marks an id as a superblock entry.
+Initializes the id as a superblock entry.
+
+#### `0x2xx` LFS_TYPE_STRUCT
+
+Associates the id with an on-disk data structure.
+
+The exact layout of the data depends on the data structure type stored in the
+chunk field and can be one of the following.
+
+Any type of struct supercedes all other structs associated with the id. For
+example, appending a ctz-struct replaces an inline-struct on the same file.
 
 #### `0x200` LFS_TYPE_DIRSTRUCT
 
@@ -322,13 +355,116 @@ Marks an id as a superblock entry.
 
 #### `0x3xx` LFS_TYPE_USERATTR
 
+Attaches a user attribute to an id. 
+
+littlefs has a concept of "user attributes". These are small user-provided
+attributes that can be used to store things like timestamps, hashes,
+permissions, etc.
+
+Each user attribute is uniquely identified by an 8-bit type which is stored in
+the chunk field, and the user attribute itself can be found in the tag's data.
+
+There are currently no standard user attributes and a portable littlefs
+implementation should work with any user attributes missing.
+
+#### `0x6xx` LFS_TYPE_TAIL
+
+Provides data for any state associated with the metadata pair itself.
+
+Currently, this is only used for is the metadata pair's tail pointer, which is
+used in the filesystem for a linked-list containing all metadata blocks.
+
+The type of the tail is stored in the chunk field. Currently any type
+supercedes any other preceding tails in the metadata pair, but this may change
+if additional metadata pair state is added.
+
 #### `0x600` LFS_TYPE_SOFTTAIL
+
+
+
+```
+         .--------.  
+         | dir A  |-.
+         |softtail| |
+.--------|        |-'
+|        '--------'  
+|        .-'    '-------------.
+|       v                      v
+|  .--------.  .--------.  .--------.
+'->| dir B  |->| dir B  |->| dir C  |
+   |        |  |softtail|  |        |
+   |        |  |        |  |        |
+   '--------'  '--------'  '--------'
+```
+
+#### `0x601` LFS_TYPE_HARDTAIL
+
+```
+         .--------.  
+         | dir A  |-.
+         |        | |
+.--------|        |-'
+|        '--------'  
+|        .-'    '-------------.
+|       v                      v
+|  .--------.  .--------.  .--------.
+'->| dir B  |->| dir B  |->| dir C  |
+   |hardtail|  |        |  |        |
+   |        |  |        |  |        |
+   '--------'  '--------'  '--------'
+```
+
+#### `0x7xx` LFS_TYPE_GSTATE
+
+Provides delta bits for global state entries.
+
+littlefs has a concept of "global state". This is a small set of state that
+can be updated by a commit to _any_ metadata pair in the filesystem.
+
+The way this works is that the global state is stored as a set of deltas
+distributed across the filesystem such that the global state can by found by
+the xor-sum of these deltas.
+
+```
+.--------.  .--------.  .--------.  .--------.  .--------.
+|        |->| gstate |->|        |->| gstate |->| gstate |
+|        |  | 0x23   |  |        |  | 0xff   |  | 0xce   |
+|        |  |        |  |        |  |        |  |        |
+'--------'  '--------'  '--------'  '--------'  '--------'
+                |                       |           |
+                v                       v           v
+      0x00 --> xor ------------------> xor ------> xor --> gstate 0x12
+```
+
+Note that storing globals this way is very expensive in terms of storage usage,
+so any global state should be kept very small.
+
+The size and format of each piece of global state depends on the type, which
+is stored in the chunk field. Currently, the only global state is move state,
+which is outlined below.
 
 #### `0x7ff` LFS_TYPE_MOVESTATE
 
+
+
 #### `0x5xx` LFS_TYPE_CRC
 
+Last but not least, the CRC tag marks the end of a commit and provides a
+checksum for any commits to the metadata block.
 
+The first 32-bits of the data contain a CRC-32 with a polynomial of
+`0x04c11db7` initialized to `0xffffffff`. This CRC provides a checksum for all
+metadata since the previous CRC tag, including the CRC tag itself. For the
+first commit, this includes the revision count for the metadata block.
+
+However, the size of the data is not limited to 32-bits. The data field may
+larger to pad the commit to the next program-aligned boundary.
+
+In addition, the CRC tag's chunk field contains a set of flags which can
+change the behaviour of commits. Currently the only flag in use is the lowest
+bit, which determines the expected state of the valid bit for any following
+tags. This is used to guarantee that unwritten storage in a metadata block
+will be detected as invalid.
 
 # TODO RM below me
 
@@ -586,25 +722,25 @@ Here's the layout of metadata blocks on disk:
 | 0x00+s | 32 bits       | CRC            |
 
 **Revision count** - Incremented every update, only the uncorrupted
-metadata-block with the most recent revision count contains the valid metadata.
+metadata block with the most recent revision count contains the valid metadata.
 Comparison between revision counts must use sequence comparison since the
 revision counts may overflow.
 
 **Dir size** - Size in bytes of the contents in the current metadata block,
-including the metadata-pair metadata. Additionally, the highest bit of the
+including the metadata pair metadata. Additionally, the highest bit of the
 dir size may be set to indicate that the directory's contents continue on the
-next metadata-pair pointed to by the tail pointer.
+next metadata pair pointed to by the tail pointer.
 
-**Tail pointer** - Pointer to the next metadata-pair in the filesystem.
+**Tail pointer** - Pointer to the next metadata pair in the filesystem.
 A null pair-pointer (0xffffffff, 0xffffffff) indicates the end of the list.
 If the highest bit in the dir size is set, this points to the next
-metadata-pair in the current directory, otherwise it points to an arbitrary
-metadata-pair. Starting with the superblock, the tail-pointers form a
-linked-list containing all metadata-pairs in the filesystem.
+metadata pair in the current directory, otherwise it points to an arbitrary
+metadata pair. Starting with the superblock, the tail-pointers form a
+linked-list containing all metadata pairs in the filesystem.
 
 **CRC** - 32 bit CRC used to detect corruption from power-lost, from block
 end-of-life, or just from noise on the storage bus. The CRC is appended to
-the end of each metadata-block. The littlefs uses the standard CRC-32, which
+the end of each metadata block. The littlefs uses the standard CRC-32, which
 uses a polynomial of 0x04c11db7, initialized with 0xffffffff.
 
 Here's an example of a simple directory stored on disk:
