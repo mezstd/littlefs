@@ -154,11 +154,11 @@ Here's a more complete example of metadata block containing 4 entries:
 | |                 data A                |        |
 | |                                       |        |
 | +----+----+----+----+----+----+----+----+        |
-| |      tag AxB      |       data B      | <--\   |
+| |      tag AxB      |       data B      | <--.   |
 | +----+----+----+----+                   |    |   |
 | |                                       |    |   +-- 1st commit
 | |         +----+----+----+----+----+----+    |   |
-| |         |      tag BxC      |         | <-\|   |
+| |         |      tag BxC      |         | <-.|   |
 | +----+----+----+----+----+----+         |   ||   |
 | |                 data C                |   ||   |
 | |                                       |   ||   |
@@ -173,7 +173,7 @@ Here's a more complete example of metadata block containing 4 entries:
 | +----+----+----+----+----+----+----+----+   ||   |
 | | CRC          |        padding         |   ||   /
 | +----+----+----+----+----+----+----+----+   ||    
-| |     tag CRCxA''   |      data A''     | <---\  \
+| |     tag CRCxA''   |      data A''     | <---.  \
 | +----+----+----+----+                   |   |||  |
 | |                                       |   |||  |
 | |         +----+----+----+----+----+----+   |||  |
@@ -191,10 +191,10 @@ Here's a more complete example of metadata block containing 4 entries:
 | |                                       |  ||||   
 | |                                       |  |||| 
 | '----+----+----+----+----+----+----+----'  ||||
-'---------------------------------------'    |||\- most recent A
-                                             ||\-- most recent B
-                                             |\--- most recent C
-                                             \---- most recent D
+'---------------------------------------'    |||'- most recent A
+                                             ||'-- most recent B
+                                             |'--- most recent C
+                                             '---- most recent D
 ```
 
 ## Metadata tags
@@ -210,12 +210,12 @@ that there are multiple levels of types which break down into more info:
 [----            32             ----]
 [1|--  11   --|--  10  --|--  10  --]
  ^.     ^     .     ^          ^- length
- |.     |     .     \------------ id
- |.     \-----.------------------ type (type3)
- \.-----------.------------------ valid bit
+ |.     |     .     '------------ id
+ |.     '-----.------------------ type (type3)
+ '.-----------.------------------ valid bit
   [-3-|-- 8 --]
     ^     ^- chunk
-    \------- type (type1)
+    '------- type (type1)
 ```
 
 
@@ -336,6 +336,128 @@ the directory is stored in the struct tag, which is described below.
 #### `0x0ff` LFS_TYPE_SUPERBLOCK
 
 Initializes the id as a superblock entry.
+
+The superblock entry is a special entry used to store format-time configuration
+and identify the filesystem.
+
+The name is a bit of a misnomer. While the superblock entry serves the same
+purpose as a superblock found in other filesystems, in littlefs the superblock
+does not get a dedicated block. Instead, the superblock entry is duplicated
+across a linked-list of metadata pairs rooted on the blocks 0 and 1. The last
+metadata pair doubles as the root directory of the filesystem.
+
+```
+.--------.  .--------.  .--------.  .--------.  .--------.
+| super  |->| super  |->| super  |->| super  |->| file B |
+| block  |  | block  |  | block  |  | block  |  | file C |
+|        |  |        |  |        |  | file A |  | file D |
+'--------'  '--------'  '--------'  '--------'  '--------'
+
+\---------------+----------------/  \---------+---------/
+          superblock pairs              root directory
+```
+
+The filesystem starts with only the root directory. The superblock metadata
+pairs grow every time the root pair is compacted in order to prolong the
+life of the device exponentially.
+
+The contents of the superblock entry are stored in a name tag with the
+LFS_TYPE_SUPERBLOCK type and an inline-struct tag. The name tag contains
+the magic string "littlefs", while the inline-struct tag contains version
+and configuration information.
+
+Layout of the superblock name tag and inline-struct tag:
+
+```
+[--      32       --]
+[v| 0ff | 000 | 008 ]
+.-------------------.
+|   magic string    |
+|    "littlefs"     |
+'-------------------'
+[v| 201 | 000 | 018 ]
+.-------------------.
+|      version      |
+|-------------------|
+|    block size     |
+|-------------------|
+|    block count    |
+|-------------------|
+|     name max      |
+|-------------------|
+|     file max      |
+|-------------------|
+|     attr max      |
+'-------------------'
+```
+
+Superblock fields:
+
+- | magic string | 8-bytes |
+  |--------------|---------|
+
+  Magic string indicating the presence of littlefs on the device. Must be the
+  string "littlefs".
+
+- | version      | 32-bits |
+  |--------------|---------|
+
+  The version of littlefs at format time. The version is encoded in a 32-bit
+  value with the upper 16-bits containing the major version, and the lower
+  16-bits containing the minor version.
+
+  This specification describes version 2.0 (`0x00020000`).
+
+
+- | block size   | 32-bits |
+  |--------------|---------|
+
+  Size of the logical block size used by the filesystem in bytes.
+
+- | block count  | 32-bits |
+  |--------------|---------|
+
+  Number of blocks in the filesystem.
+
+- | name max     | 32-bits |
+  |--------------|---------|
+
+  Maximum size of file names in bytes.
+
+- | file max     | 32-bits |
+  |--------------|---------|
+
+  Maximum size of files in bytes.
+
+- | attr max     | 32-bits |
+  |--------------|---------|
+
+  Maximum size of file attributes in bytes.
+
+The superblock must always be the first entry (id 0) in a metdata pair as well
+as be the first entry written to the block. This means that the superblock
+entry can be read from a device using offsets alone.
+
+```
+  .----+----+----+----+----+----+----+----. \
+.-|  revision count   |     name tag      | |
+| +----+----+----+----+----+----+----+----+ +- magic string
+| | "l   i    t    t    l    e    f    s" | |
+| +----+----+----+----+----+----+----+----+ / \
+| | inline struct tag |      version      |   |
+| +----+----+----+----+----+----+----+----+   |
+| |    block size     |    block count    |   |
+| +----+----+----+----+----+----+----+----+   +- config info
+| |     name max      |     file max      |   |
+| +----+----+----+----+----+----+----+----+ \ |
+| |     attr max      |      CRC tag      | | |
+| +----+----+----+----+----+----+----+----+ | /
+| |        CRC        |      padding      | +- CRC and padding
+| +----+----+----+----+                   | |
+| |                                       | |
+| '---------------------------------------' /
+'---------------------------------------'  
+```
 
 #### `0x2xx` LFS_TYPE_STRUCT
 
