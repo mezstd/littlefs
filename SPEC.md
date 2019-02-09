@@ -50,33 +50,33 @@ most recent metadata should be considered valid.
 The high-level layout of a metadata block is fairly simple:
 
 ```
-  .----+----+----+----+----+----+----+----.
+  .---------------------------------------.
 .-|  revision count   |      entries      |  \
-| +----+----+----+----+                   |  |
+| |-------------------'                   |  |
 | |                                       |  |
 | |                                       |  +-- 1st commit
 | |                                       |  |
-| |                   +----+----+----+----+  |
+| |                   .-------------------|  |
 | |                   |        CRC        |  /
-| +----+----+----+----+----+----+----+----+
+| |-------------------+-------------------|
 | |                entries                |  \
 | |                                       |  |
 | |                                       |  +-- 2nd commit
-| |    +----+----+----+----+----+----+----+  |
+| |    .-------------------+--------------|  |
 | |    |        CRC        |    padding   |  /
-| +----+----+----+----+----+----+----+----+
+| |----+-------------------+--------------|
 | |                entries                |  \
 | |                                       |  |
 | |                                       |  +-- 3rd commit
-| |         +----+----+----+----+----+----|  |
+| |         .-------------------+---------|  |
 | |         |        CRC        |         |  /
-| +----+----+----+----+----+----+         |
+| |---------+-------------------'         |
 | |           unwritten storage           |  more commits
 | |                                       |       |
 | |                                       |       v
 | |                                       |
 | |                                       |
-| '----+----+----+----+----+----+----+----'
+| '---------------------------------------'
 '---------------------------------------'
 ```
 
@@ -101,9 +101,8 @@ Metadata block fields:
 - | CRC            | 32-bits |
   |----------------|---------|
 
-  Detects corruption from power-loss or other write issues. Uses the
-  standard CRC-32, which uses a polynomial of `0x04c11db7`, initialized
-  with `0xffffffff`.
+  Detects corruption from power-loss or other write issues. Uses a CRC-32
+  with a polynomial of `0x04c11db7` initialized with `0xffffffff`.
 
 Entries themselves are stored as a 32-bit tag followed by a variable length
 blob of data. But exactly how these tags are stored is a little bit tricky.
@@ -148,49 +147,49 @@ block.
 Here's a more complete example of metadata block containing 4 entries:
 
 ```
-  .----+----+----+----+----+----+----+----.
+  .---------------------------------------.
 .-|  revision count   |      tag ~A       |        \
-| +----+----+----+----+----+----+----+----+        |
+| |-------------------+-------------------|        |
 | |                 data A                |        |
 | |                                       |        |
-| +----+----+----+----+----+----+----+----+        |
+| |-------------------+-------------------|        |
 | |      tag AxB      |       data B      | <--.   |
-| +----+----+----+----+                   |    |   |
+| |-------------------'                   |    |   |
 | |                                       |    |   +-- 1st commit
-| |         +----+----+----+----+----+----+    |   |
+| |         .-------------------+---------|    |   |
 | |         |      tag BxC      |         | <-.|   |
-| +----+----+----+----+----+----+         |   ||   |
+| |---------+-------------------'         |   ||   |
 | |                 data C                |   ||   |
 | |                                       |   ||   |
-| +----+----+----+----+----+----+----+----+   ||   |
+| |-------------------+-------------------|   ||   |
 | |     tag CxCRC     |        CRC        |   ||   /
-| +----+----+----+----+----+----+----+----+   ||    
+| |-------------------+-------------------|   ||    
 | |     tag CRCxA'    |      data A'      |   ||   \
-| +----+----+----+----+                   |   ||   |
+| |-------------------'                   |   ||   |
 | |                                       |   ||   |
-| |              +----+----+----+----+----+   ||   +-- 2nd commit
+| |              .-------------------+----|   ||   +-- 2nd commit
 | |              |     tag CRCxA'    |    |   ||   |
-| +----+----+----+----+----+----+----+----+   ||   |
+| |--------------+-------------------+----|   ||   |
 | | CRC          |        padding         |   ||   /
-| +----+----+----+----+----+----+----+----+   ||    
+| |--------------+----+-------------------|   ||    
 | |     tag CRCxA''   |      data A''     | <---.  \
-| +----+----+----+----+                   |   |||  |
+| |-------------------'                   |   |||  |
 | |                                       |   |||  |
-| |         +----+----+----+----+----+----+   |||  |
+| |         .-------------------+---------|   |||  |
 | |         |     tag A''xD     |         | < |||  |
-| +----+----+----+----+----+----+         |  ||||  +-- 3rd commit
+| |---------+-------------------'         |  ||||  +-- 3rd commit
 | |                data D                 |  ||||  |
-| |                             +----+----+  ||||  |
+| |                             .---------|  ||||  |
 | |                             |   tag Dx|  ||||  |
-| +----+----+----+----+----+----+----+----+  ||||  |
+| |---------+-------------------+---------|  ||||  |
 | |CRC      |        CRC        |         |  ||||  /
-| +----+----+----+----+----+----+         |  ||||   
+| |---------+-------------------'         |  ||||   
 | |           unwritten storage           |  ||||  more commits
 | |                                       |  ||||       |
 | |                                       |  ||||       v              
 | |                                       |  ||||   
 | |                                       |  |||| 
-| '----+----+----+----+----+----+----+----'  ||||
+| '---------------------------------------'  ||||
 '---------------------------------------'    |||'- most recent A
                                              ||'-- most recent B
                                              |'--- most recent C
@@ -238,8 +237,8 @@ Metadata tag fields:
 
   Indicates if the tag is valid.
 
-- | type3     | 11-bits | `0x000` = invalid |
-  |-----------|---------|-------------------|
+- | type3     | 11-bits |
+  |-----------|---------|
 
   Type of the tag. This field is broken down further into a 3-bit abstract
   type and an 8-bit chunk field. Note that the value `0x000` is invalid and
@@ -257,36 +256,21 @@ Metadata tag fields:
   Chunk field used for various purposes by the different abstract types.
   type1+chunk+id form a unique identifier for each tag in the metadata block.
 
-- | id        | 10-bits | `0x3ff` = no id |
-  |-----------|---------|-----------------|
+- | id        | 10-bits |
+  |-----------|---------|
 
   File id associated with the tag. Each file in a metadata block gets a unique
   id which is used to associate tags with that file. The special value `0x3ff`
   is used for any tags that are not associated with a file, such as directory
   and global metadata.
 
-- | length    | 10-bits | `0x3ff` = delete |
-  |-----------|---------|------------------|
+- | length    | 10-bits |
+  |-----------|---------|
 
   Length of the data in bytes. The special value `0x3ff` indicates that this
   tag has been deleted.
 
 ## Metadata types
-
-<!--
-Each metadata tag falls into one of 7 abstract types:
-
-<!-- | Encoding | Name              | Description                       | -->
-<!-- |----------|-------------------|-----------------------------------| -->
-<!-- | `0x4xx`  | LFS_TYPE_SPLICE   | Creation/deletion of files        | -->
-<!-- | `0x0xx`  | LFS_TYPE_NAME     | Name and type of file             | -->
-<!-- | `0x2xx`  | LFS_TYPE_STRUCT   | File data structure               | -->
-<!-- | `0x3xx`  | LFS_TYPE_USERATTR | User attributes                   | -->
-<!-- | `0x6xx`  | LFS_TYPE_TAIL     | Tail field for this metadata pair | -->
-<!-- | `0x7xx`  | LFS_TYPE_GSTATE   | Global state                      | -->
-<!-- | `0x5xx`  | LFS_TYPE_CRC      | CRC for the current commit        | -->
-
--->
 
 What follows is an exhaustive list of metadata in littlefs.
 
@@ -362,9 +346,9 @@ pairs grow every time the root pair is compacted in order to prolong the
 life of the device exponentially.
 
 The contents of the superblock entry are stored in a name tag with the
-LFS_TYPE_SUPERBLOCK type and an inline-struct tag. The name tag contains
-the magic string "littlefs", while the inline-struct tag contains version
-and configuration information.
+superblock type and an inline-struct tag. The name tag contains the magic
+string "littlefs", while the inline-struct tag contains version and
+configuration information.
 
 Layout of the superblock name tag and inline-struct tag:
 
@@ -408,7 +392,6 @@ Superblock fields:
 
   This specification describes version 2.0 (`0x00020000`).
 
-
 - | block size   | 32-bits |
   |--------------|---------|
 
@@ -438,27 +421,6 @@ The superblock must always be the first entry (id 0) in a metdata pair as well
 as be the first entry written to the block. This means that the superblock
 entry can be read from a device using offsets alone.
 
-```
-  .----+----+----+----+----+----+----+----. \
-.-|  revision count   |     name tag      | |
-| +----+----+----+----+----+----+----+----+ +- magic string
-| | "l   i    t    t    l    e    f    s" | |
-| +----+----+----+----+----+----+----+----+ / \
-| | inline struct tag |      version      |   |
-| +----+----+----+----+----+----+----+----+   |
-| |    block size     |    block count    |   |
-| +----+----+----+----+----+----+----+----+   +- config info
-| |     name max      |     file max      |   |
-| +----+----+----+----+----+----+----+----+ \ |
-| |     attr max      |      CRC tag      | | |
-| +----+----+----+----+----+----+----+----+ | /
-| |        CRC        |      padding      | +- CRC and padding
-| +----+----+----+----+                   | |
-| |                                       | |
-| '---------------------------------------' /
-'---------------------------------------'  
-```
-
 #### `0x2xx` LFS_TYPE_STRUCT
 
 Associates the id with an on-disk data structure.
@@ -471,9 +433,128 @@ example, appending a ctz-struct replaces an inline-struct on the same file.
 
 #### `0x200` LFS_TYPE_DIRSTRUCT
 
+Gives the id a directory data structure.
+
+Directories in littlefs are stored on disk as a linked-list of metadata pairs,
+each pair containing any number of files in alphabetical order.
+
+```
+    |
+    v
+.--------.  .--------.  .--------.  .--------.  .--------.  .--------.
+| file A |->| file D |->| file G |->| file I |->| file J |->| file M |
+| file B |  | file E |  | file H |  |        |  | file K |  | file N |
+| file C |  | file F |  |        |  |        |  | file L |  |        |
+'--------'  '--------'  '--------'  '--------'  '--------'  '--------'
+```
+
+The dir-struct tag contains only the pointer to the first metadata-pair in the
+directory. The directory size is not known without traversing the directory.
+
+The pointer to the next metadata-pair in the directory is stored in a tail tag,
+which is described below.
+
+Layout of the dir-struct tag:
+
+```
+[--      32       --]
+[v| 200 | id  | 008 ]
+.-------------------.
+|   metadata pair   |
+|                   |
+'-------------------'
+```
+
+Dir-struct fields:
+
+
+- | metadata pair | 8-bytes |
+  |---------------|---------|
+
+  Pointer to the first metadata-pair in the directory.
+
 #### `0x201` LFS_TYPE_INLINESTRUCT
 
+Gives the id an inline data structure.
+
+Inline structs store small files that can fit in the metdata pair. In this
+case, the file data is stored directly in the tag's data area.
+
+Layout of the inline-struct tag:
+
+```
+[--      32       --]
+[v| 201 | id | size ]
+.-------------------.
+|    inline data    |
+|                   |
+|                   |
+'-------------------'
+```
+
+Inline-struct fields:
+
+
+- | inline data | variable length |
+  |-------------|-----------------|
+
+  File data stored directly in the metadata-pair.
+
 #### `0x202` LFS_TYPE_CTZSTRUCT
+
+Gives the id a CTZ skip-list data structure.
+
+CTZ skip-lists store files that can not fit in the metadata pair. These files
+are stored in a skip-list in reverse, with a pointer to the head of the
+skip-list. Note that the head of the skip-list and the file size is enough
+information to read the file.
+
+How exactly CTZ skip-lists work is a bit complicted. A full explanation can be
+found in the [DESIGN.md](DESIGN.md#ctz-skip-lists).
+
+A quick summary: For every nth block where n is divisible by 2^x, the block
+contains a pointer to block n-2^x. These pointers are stored in increasing
+order of x in each block of the file before the actual data.
+
+```
+                                                               |
+                                                               v
+.--------.  .--------.  .--------.  .--------.  .--------.  .--------.
+| A      |<-| D      |<-| G      |<-| J      |<-| M      |<-| P      |
+| B      |<-| E      |--| H      |<-| K      |--| N      |  | Q      |
+| C      |<-| F      |--| I      |--| L      |--| O      |  |        |
+'--------'  '--------'  '--------'  '--------'  '--------'  '--------'
+  block 0     block 1     block 2     block 3     block 4     block 5
+              1 skip      2 skips     1 skip      3 skips     1 skip
+```
+
+Note that the maximum number of pointers in a block is bounded by the maximum
+file size divided by the block size. With 32 bits for file size, this results
+in a minimum block size of 104 bytes.
+
+Layout of the CTZ-struct tag:
+
+```
+[--      32       --]
+[v| 202 | id  | 008 ]
+.-------------------.
+|     file head     |
+|-------------------|
+|     file size     |
+'-------------------'
+```
+
+CTZ-struct fields:
+
+- | file head | 32-bits |
+  |-----------|---------|
+
+  Pointer to the block that is the head of the file's CTZ skip-list.
+
+- | file size | 32-bits |
+  |-----------|---------|
+
+  Size of the file in bytes.
 
 #### `0x3xx` LFS_TYPE_USERATTR
 
@@ -575,9 +656,9 @@ Last but not least, the CRC tag marks the end of a commit and provides a
 checksum for any commits to the metadata block.
 
 The first 32-bits of the data contain a CRC-32 with a polynomial of
-`0x04c11db7` initialized to `0xffffffff`. This CRC provides a checksum for all
-metadata since the previous CRC tag, including the CRC tag itself. For the
-first commit, this includes the revision count for the metadata block.
+`0x04c11db7` initialized with `0xffffffff`. This CRC provides a checksum for
+all metadata since the previous CRC tag, including the CRC tag itself. For
+the first commit, this includes the revision count for the metadata block.
 
 However, the size of the data is not limited to 32-bits. The data field may
 larger to pad the commit to the next program-aligned boundary.
