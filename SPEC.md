@@ -274,7 +274,7 @@ Metadata tag fields:
 
 What follows is an exhaustive list of metadata in littlefs.
 
-----
+---
 #### `0x401` LFS_TYPE_CREATE
 
 Creates a new file with this id. Note that files in a metadata block
@@ -285,14 +285,14 @@ an imaginary array of files.
 The create and delete tags allow littlefs to keep files in a directory
 ordered alphabetically by filename.
 
-----
+---
 #### `0x4ff` LFS_TYPE_DELETE
 
 Deletes the file with this id. An inverse to create, this tag moves over
 any files neighboring this id similar to a deletion from an imaginary
 array of files.
 
-----
+---
 #### `0x0xx` LFS_TYPE_NAME
 
 Associates the id with a file name and file type. 
@@ -306,14 +306,38 @@ the following.
 Currently, the name tag must precede any other tags associated with the id and
 can not be reassigned without deleting the file.
 
-----
+Layout of the name tag:
+
+```
+[--      32       --]
+[v| 0xx | id | size ]
+.-------------------.
+|     file name     |
+|                   |
+|                   |
+'-------------------'
+```
+
+Name fields:
+
+- | file type | 8-bits          |
+  |-----------|-----------------|
+
+  Type of the file.
+
+- | file name | variable length |
+  |-----------|-----------------|
+
+  File name stored as an ASCII string.
+
+---
 #### `0x001` LFS_TYPE_REG
 
 Initializes the id + name as a regular file.
 
 How each file is stored depends on its struct tag, which is described below.
 
-----
+---
 #### `0x002` LFS_TYPE_DIR
 
 Initializes the id + name as a directory.
@@ -322,7 +346,7 @@ Directories in littlefs are stored on disk as a linked-list of metadata pairs,
 each pair containing any number of files in alphabetical order. A pointer to
 the directory is stored in the struct tag, which is described below.
 
-----
+---
 #### `0x0ff` LFS_TYPE_SUPERBLOCK
 
 Initializes the id as a superblock entry.
@@ -427,7 +451,7 @@ The superblock must always be the first entry (id 0) in a metdata pair as well
 as be the first entry written to the block. This means that the superblock
 entry can be read from a device using offsets alone.
 
-----
+---
 #### `0x2xx` LFS_TYPE_STRUCT
 
 Associates the id with an on-disk data structure.
@@ -438,7 +462,7 @@ chunk field and can be one of the following.
 Any type of struct supercedes all other structs associated with the id. For
 example, appending a ctz-struct replaces an inline-struct on the same file.
 
-----
+---
 #### `0x200` LFS_TYPE_DIRSTRUCT
 
 Gives the id a directory data structure.
@@ -475,13 +499,12 @@ Layout of the dir-struct tag:
 
 Dir-struct fields:
 
-
 - | metadata pair | 8-bytes |
   |---------------|---------|
 
   Pointer to the first metadata-pair in the directory.
 
-----
+---
 #### `0x201` LFS_TYPE_INLINESTRUCT
 
 Gives the id an inline data structure.
@@ -503,13 +526,12 @@ Layout of the inline-struct tag:
 
 Inline-struct fields:
 
-
 - | inline data | variable length |
   |-------------|-----------------|
 
   File data stored directly in the metadata-pair.
 
-----
+---
 #### `0x202` LFS_TYPE_CTZSTRUCT
 
 Gives the id a CTZ skip-list data structure.
@@ -566,7 +588,7 @@ CTZ-struct fields:
 
   Size of the file in bytes.
 
-----
+---
 #### `0x3xx` LFS_TYPE_USERATTR
 
 Attaches a user attribute to an id. 
@@ -581,22 +603,15 @@ the chunk field, and the user attribute itself can be found in the tag's data.
 There are currently no standard user attributes and a portable littlefs
 implementation should work with any user attributes missing.
 
-----
+---
 #### `0x6xx` LFS_TYPE_TAIL
 
-Provides data for any state associated with the metadata pair itself.
+Provides the tail pointer for the metadata pair itself.
 
-Currently, this is only used for is the metadata pair's tail pointer, which is
-used in the filesystem for a linked-list containing all metadata blocks.
-
-The type of the tail is stored in the chunk field. Currently any type
-supercedes any other preceding tails in the metadata pair, but this may change
-if additional metadata pair state is added.
-
-----
-#### `0x600` LFS_TYPE_SOFTTAIL
-
-
+The metadata pair's tail pointer is used in littlefs for a linked-list
+containing all metadata pairs. The chunk field contains the type of the tail,
+which indicates if the following metadata pair is a part of the directory
+(hard-tail) or only used to traverse the filesystem (soft-tail).
 
 ```
          .--------.  
@@ -608,30 +623,75 @@ if additional metadata pair state is added.
 |       v                      v
 |  .--------.  .--------.  .--------.
 '->| dir B  |->| dir B  |->| dir C  |
-   |        |  |softtail|  |        |
+   |hardtail|  |softtail|  |        |
    |        |  |        |  |        |
    '--------'  '--------'  '--------'
 ```
 
-----
+Currently any type supercedes any other preceding tails in the metadata pair,
+but this may change if additional metadata pair state is added.
+
+A note about the metadata pair linked-list: Normally, this linked-list contains
+every metadata pair in the filesystem. However, there are some operations that
+can cause this linked-list to become out of sync if a power-loss were to occur.
+When this happens, littlefs sets the "sync" flag in the global state. How
+exactly this flag is stored is described below.
+
+When the sync flag is set:
+
+- The linked-list may contain an orphaned directory that has been removed in
+  the filesystem.
+- The linked-list may contain a metadata pair with a bad block that has been
+  replaced in the filesystem.
+
+If the sync flag is set, the threaded linked-list must be checked for these
+errors before it can be used reliably. Note that the threaded linked-list can
+be ignored if littlefs is mounted read-only.
+
+Layout of the tail tag:
+
+```
+[--      32       --]
+[v| 6xx | id  | 008 ]
+.-------------------.
+|   metadata pair   |
+|                   |
+'-------------------'
+```
+
+Tail fields:
+
+- | tail type     | 8-bits  |
+  |---------------|---------|
+
+  Type of the tail pointer.
+
+- | metadata pair | 8-bytes |
+  |---------------|---------|
+
+  Pointer to the next metadata-pair.
+
+---
+#### `0x600` LFS_TYPE_SOFTTAIL
+
+Provides a tail pointer that points to the next metadata pair in the
+filesystem.
+
+In this case, the next metadata pair is not a part of our current directory
+and should only be followed when traversing the entire filesystem.
+
+---
 #### `0x601` LFS_TYPE_HARDTAIL
 
-```
-         .--------.  
-         | dir A  |-.
-         |        | |
-.--------|        |-'
-|        '--------'  
-|        .-'    '-------------.
-|       v                      v
-|  .--------.  .--------.  .--------.
-'->| dir B  |->| dir B  |->| dir C  |
-   |hardtail|  |        |  |        |
-   |        |  |        |  |        |
-   '--------'  '--------'  '--------'
-```
+Provides a tail pointer that points to the next metadata pair in the
+directory.
 
-----
+In this case, the next metadata pair belongs to the current directory. Note
+that because directories in littlefs are sorted alphabetically, the next
+metadata pair should only contain filenames greater than any filename in the
+current pair.
+
+---
 #### `0x7xx` LFS_TYPE_GSTATE
 
 Provides delta bits for global state entries.
@@ -661,12 +721,66 @@ The size and format of each piece of global state depends on the type, which
 is stored in the chunk field. Currently, the only global state is move state,
 which is outlined below.
 
-----
+---
 #### `0x7ff` LFS_TYPE_MOVESTATE
 
+Provides delta bits for the global move state.
 
+The move state in littlefs is used to store info about operations that could
+cause to filesystem to go out of sync if the power is lost. The operations
+where this could occur is moves of files between metadata pairs and any
+operation that changes metadata pairs on the threaded linked-list.
 
-----
+In the case of moves, the move state contains a tag + metadata pair describing
+the source of the ongoing move. If this tag is non-zero, that means that power
+was lost during a move, and the file exists in two different locations. If this
+happens, the source of the move should be considered deleted, and the move
+should be completed (the source should be deleted) before any other write
+operations to the filesystem.
+
+In the case of operations to the threaded linked-list, a single "sync" bit is
+used to indicate that a modification is ongoing. If this sync flag is set, the
+threaded linked-list will need to be checked for errors before it can be used
+reliably. The exact cases to check for are described above in the tail tag.
+
+Layout of the move state:
+
+```
+[--      32       --]
+[v| 7ff  | id | 008 ]
+.-------------------.
+|s| type | id | 000 |
+|-------------------|
+|   metadata pair   |
+|                   |
+'-------------------'
+```
+
+Move state fields:
+
+- | sync bit      | 1-bit   |
+  |---------------|---------|
+
+  Indicates if the metadata pair threaded linked-list is in-sync. If set, the
+  threaded linked-list should be checked for errors.
+
+- | move type     | 11-bits |
+  |---------------|---------|
+
+  Type of move being performed. Must be either `0x000`, indicating no move, or
+  `0x4ff` indicating the source file should be deleted.
+
+- | move id       | 10-bits |
+  |---------------|---------|
+
+  The file id being moved.
+
+- | metadata pair | 8-bytes |
+  |---------------|---------|
+
+  Pointer to the metadata-pair containing the move.
+
+---
 #### `0x5xx` LFS_TYPE_CRC
 
 Last but not least, the CRC tag marks the end of a commit and provides a
@@ -685,6 +799,8 @@ change the behaviour of commits. Currently the only flag in use is the lowest
 bit, which determines the expected state of the valid bit for any following
 tags. This is used to guarantee that unwritten storage in a metadata block
 will be detected as invalid.
+
+---
 
 # TODO RM below me
 
