@@ -603,6 +603,30 @@ the chunk field, and the user attribute itself can be found in the tag's data.
 There are currently no standard user attributes and a portable littlefs
 implementation should work with any user attributes missing.
 
+Layout of the user-attr tag:
+
+```
+[--      32       --]
+[v| 3xx | id | size ]
+.-------------------.
+|     attr data     |
+|                   |
+|                   |
+'-------------------'
+```
+
+User-attr fields:
+
+- | attr type | 8-bits          |
+  |-----------|-----------------|
+
+  Type of the user attributes.
+
+- | attr data | variable length |
+  |-----------|-----------------|
+
+  The data associated with the user attribute.
+
 ---
 #### `0x6xx` LFS_TYPE_TAIL
 
@@ -799,6 +823,37 @@ change the behaviour of commits. Currently the only flag in use is the lowest
 bit, which determines the expected state of the valid bit for any following
 tags. This is used to guarantee that unwritten storage in a metadata block
 will be detected as invalid.
+
+Layout of the CRC tag:
+
+```
+[--      32       --]
+[v| 5xx | id | size ]
+.-------------------.
+|        CRC        |
+|-------------------|
+|      padding      |
+|                   |
+'-------------------'
+```
+
+CRC fields:
+
+- | valid state | 1-bit           |
+  |-------------|-----------------|
+
+  Indicates the expected value of the valid bit for any tags in the next commit.
+
+- | CRC         | 32-bits         |
+  |-------------|-----------------|
+
+  CRC-32 with a polynomial of `0x04c11db7` initialized with `0xffffffff`.
+
+- | padding     | variable length |
+  |-------------|-----------------|
+
+  Padding to the next program-aligned boundary. No gaurantees are made about
+  the contents.
 
 ---
 
