@@ -366,8 +366,8 @@ Layout of the superblock name tag and inline-struct tag:
  '----------------- valid bit
 
         tag                          data
-[--      32      --][--      32      --|--      32      --]
-[1|- 11 -| 10 | 10 ][--      32      --|--      32      --]
+[--      32      --][--      32      --|--      32      --|
+[1|- 11 -| 10 | 10 ][--      32      --|--      32      --|
  ^    ^     ^    ^            ^- version         ^- block size
  |    |     |    '- size (24)
  |    |     '------ id (0)
@@ -375,13 +375,13 @@ Layout of the superblock name tag and inline-struct tag:
  '----------------- valid bit
 
                         data (cont)
-[--      32      --|--      32      --|--      32      --]
-[--      32      --|--      32      --|--      32      --]
+|--      32      --|--      32      --|--      32      --|
+|--      32      --|--      32      --|--      32      --|
           ^- block count     ^- name max        ^- file max
 
      data (cont)
-[--      32      --]
-[--      32      --]
+|--      32      --]
+|--      32      --]
           ^- attr max
 ```
 
