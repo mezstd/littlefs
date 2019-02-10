@@ -91,18 +91,14 @@ alignment.
 
 Metadata block fields:
 
-- | revision count | 32-bits |
-  |----------------|---------|
+- **revision count (32-bits)** - Incremented every erase cycle. If both blocks
+  contain valid commits, only the block with the most recent revision count
+  should be used. Sequence comparison must be used to avoid issues with
+  integer overflow.
 
-  Incremented every erase cycle. If both blocks contain valid commits, only
-  the block with the most recent revision count should be used. Sequence
-  comparison must be used to avoid issues with integer overflow.
-
-- | CRC            | 32-bits |
-  |----------------|---------|
-
-  Detects corruption from power-loss or other write issues. Uses a CRC-32
-  with a polynomial of `0x04c11db7` initialized with `0xffffffff`.
+- **CRC (32-bits)** - Detects corruption from power-loss or other write
+  issues.  Uses a CRC-32 with a polynomial of `0x04c11db7` initialized
+  with `0xffffffff`.
 
 Entries themselves are stored as a 32-bit tag followed by a variable length
 blob of data. But exactly how these tags are stored is a little bit tricky.
@@ -232,43 +228,26 @@ invalid and can be used for null values.
 
 Metadata tag fields:
 
-- | valid bit | 1-bit   |
-  |-----------|---------|
+- **valid bit (1-bit)** - Indicates if the tag is valid.
 
-  Indicates if the tag is valid.
+- **type3 (11-bits)** - Type of the tag. This field is broken down further
+  into a 3-bit abstract type and an 8-bit chunk field. Note that the value
+  `0x000` is invalid and not assigned a type.
 
-- | type3     | 11-bits |
-  |-----------|---------|
+- **type1 (3-bits)** - Abstract type of the tag. Groups the tags into
+  8 categories that facilitate bitmasked lookups.
 
-  Type of the tag. This field is broken down further into a 3-bit abstract
-  type and an 8-bit chunk field. Note that the value `0x000` is invalid and
-  not assigned a type.
+- **chunk (8-bits)** - Chunk field used for various purposes by the different
+  abstract types.  type1+chunk+id form a unique identifier for each tag in the
+  metadata block.
 
-- | type1     | 3-bits  |
-  |-----------|---------|
+- **id (10-bits)** - File id associated with the tag. Each file in a metadata
+  block gets a unique id which is used to associate tags with that file. The
+  special value `0x3ff` is used for any tags that are not associated with a
+  file, such as directory and global metadata.
 
-  Abstract type of the tag. Groups the tags into 8 categories that facilitate
-  bitmasked lookups.
-
-- | chunk     | 8-bits  |
-  |-----------|---------|
-
-  Chunk field used for various purposes by the different abstract types.
-  type1+chunk+id form a unique identifier for each tag in the metadata block.
-
-- | id        | 10-bits |
-  |-----------|---------|
-
-  File id associated with the tag. Each file in a metadata block gets a unique
-  id which is used to associate tags with that file. The special value `0x3ff`
-  is used for any tags that are not associated with a file, such as directory
-  and global metadata.
-
-- | length    | 10-bits |
-  |-----------|---------|
-
-  Length of the data in bytes. The special value `0x3ff` indicates that this
-  tag has been deleted.
+- **length (10-bits)** - Length of the data in bytes. The special value
+  `0x3ff` indicates that this tag has been deleted.
 
 ## Metadata types
 
@@ -321,15 +300,9 @@ Layout of the name tag:
 
 Name fields:
 
-- | file type | 8-bits          |
-  |-----------|-----------------|
+- **file type (8-bits)** - Type of the file.
 
-  Type of the file.
-
-- | file name | variable length |
-  |-----------|-----------------|
-
-  File name stored as an ASCII string.
+- **file name** - File name stored as an ASCII string.
 
 ---
 #### `0x001` LFS_TYPE_REG
@@ -414,45 +387,25 @@ Layout of the superblock name tag and inline-struct tag:
 
 Superblock fields:
 
-- | magic string | 8-bytes |
-  |--------------|---------|
+- **magic string (8-bytes)** - Magic string indicating the presence of littlefs
+  on the device. Must be the string "littlefs".
 
-  Magic string indicating the presence of littlefs on the device. Must be the
-  string "littlefs".
-
-- | version      | 32-bits |
-  |--------------|---------|
-
-  The version of littlefs at format time. The version is encoded in a 32-bit
-  value with the upper 16-bits containing the major version, and the lower
-  16-bits containing the minor version.
+- **version (32-bits)** - The version of littlefs at format time. The version
+  is encoded in a 32-bit value with the upper 16-bits containing the major
+  version, and the lower 16-bits containing the minor version.
 
   This specification describes version 2.0 (`0x00020000`).
 
-- | block size   | 32-bits |
-  |--------------|---------|
+- **block size (32-bits)** - Size of the logical block size used by the
+  filesystem in bytes.
 
-  Size of the logical block size used by the filesystem in bytes.
+- **block count (32-bits)** - Number of blocks in the filesystem.
 
-- | block count  | 32-bits |
-  |--------------|---------|
+- **name max (32-bits)** - Maximum size of file names in bytes.
 
-  Number of blocks in the filesystem.
+- **file max (32-bits)** - Maximum size of files in bytes.
 
-- | name max     | 32-bits |
-  |--------------|---------|
-
-  Maximum size of file names in bytes.
-
-- | file max     | 32-bits |
-  |--------------|---------|
-
-  Maximum size of files in bytes.
-
-- | attr max     | 32-bits |
-  |--------------|---------|
-
-  Maximum size of file attributes in bytes.
+- **attr max (32-bits)** - Maximum size of file attributes in bytes.
 
 The superblock must always be the first entry (id 0) in a metdata pair as well
 as be the first entry written to the block. This means that the superblock
@@ -507,10 +460,8 @@ Layout of the dir-struct tag:
 
 Dir-struct fields:
 
-- | metadata pair | 8-bytes |
-  |---------------|---------|
-
-  Pointer to the first metadata-pair in the directory.
+- **metadata pair (8-bytes)** - Pointer to the first metadata-pair
+  in the directory.
 
 ---
 #### `0x201` LFS_TYPE_INLINESTRUCT
@@ -534,10 +485,7 @@ Layout of the inline-struct tag:
 
 Inline-struct fields:
 
-- | inline data | variable length |
-  |-------------|-----------------|
-
-  File data stored directly in the metadata-pair.
+- **inline data** - File data stored directly in the metadata-pair.
 
 ---
 #### `0x202` LFS_TYPE_CTZSTRUCT
@@ -588,15 +536,10 @@ Layout of the CTZ-struct tag:
 
 CTZ-struct fields:
 
-- | file head | 32-bits |
-  |-----------|---------|
+- **file head (32-bits)** - Pointer to the block that is the head of the
+  file's CTZ skip-list.
 
-  Pointer to the block that is the head of the file's CTZ skip-list.
-
-- | file size | 32-bits |
-  |-----------|---------|
-
-  Size of the file in bytes.
+- **file size (32-bits)** - Size of the file in bytes.
 
 ---
 #### `0x3xx` LFS_TYPE_USERATTR
@@ -628,15 +571,9 @@ Layout of the user-attr tag:
 
 User-attr fields:
 
-- | attr type | 8-bits          |
-  |-----------|-----------------|
+- **attr type (8-bits)** - Type of the user attributes.
 
-  Type of the user attributes.
-
-- | attr data | variable length |
-  |-----------|-----------------|
-
-  The data associated with the user attribute.
+- **attr data** - The data associated with the user attribute.
 
 ---
 #### `0x6xx` LFS_TYPE_TAIL
@@ -698,15 +635,9 @@ Layout of the tail tag:
 
 Tail fields:
 
-- | tail type     | 8-bits  |
-  |---------------|---------|
+- **tail type (8-bits)** - Type of the tail pointer.
 
-  Type of the tail pointer.
-
-- | metadata pair | 8-bytes |
-  |---------------|---------|
-
-  Pointer to the next metadata-pair.
+- **metadata pair (8-bytes)** - Pointer to the next metadata-pair.
 
 ---
 #### `0x600` LFS_TYPE_SOFTTAIL
@@ -799,27 +730,17 @@ Layout of the move state:
 
 Move state fields:
 
-- | sync bit      | 1-bit   |
-  |---------------|---------|
+- **sync bit (1-bit)** - Indicates if the metadata pair threaded linked-list is
+  in-sync. If set, the threaded linked-list should be checked for errors.
 
-  Indicates if the metadata pair threaded linked-list is in-sync. If set, the
-  threaded linked-list should be checked for errors.
+- **move type (11-bits)** - Type of move being performed. Must be either
+  `0x000`, indicating no move, or `0x4ff` indicating the source file should
+  be deleted.
 
-- | move type     | 11-bits |
-  |---------------|---------|
+- **move id (10-bits)** - The file id being moved.
 
-  Type of move being performed. Must be either `0x000`, indicating no move, or
-  `0x4ff` indicating the source file should be deleted.
-
-- | move id       | 10-bits |
-  |---------------|---------|
-
-  The file id being moved.
-
-- | metadata pair | 8-bytes |
-  |---------------|---------|
-
-  Pointer to the metadata-pair containing the move.
+- **metadata pair (8-bytes)** - Pointer to the metadata-pair containing
+  the move.
 
 ---
 #### `0x5xx` LFS_TYPE_CRC
@@ -857,20 +778,13 @@ Layout of the CRC tag:
 
 CRC fields:
 
-- | valid state | 1-bit           |
-  |-------------|-----------------|
+- **valid state (1-bit)** - Indicates the expected value of the valid bit for
+  any tags in the next commit.
 
-  Indicates the expected value of the valid bit for any tags in the next commit.
+- **CRC (32-bits)** - CRC-32 with a polynomial of `0x04c11db7` initialized with
+  `0xffffffff`.
 
-- | CRC         | 32-bits         |
-  |-------------|-----------------|
-
-  CRC-32 with a polynomial of `0x04c11db7` initialized with `0xffffffff`.
-
-- | padding     | variable length |
-  |-------------|-----------------|
-
-  Padding to the next program-aligned boundary. No gaurantees are made about
-  the contents.
+- **padding** - Padding to the next program-aligned boundary. No guarantees are
+  made about the contents.
 
 ---
