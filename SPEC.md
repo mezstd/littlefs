@@ -52,25 +52,25 @@ The high-level layout of a metadata block is fairly simple:
 ```
   .---------------------------------------.
 .-|  revision count   |      entries      |  \
-| |-------------------'                   |  |
+| |-------------------+                   |  |
 | |                                       |  |
 | |                                       |  +-- 1st commit
 | |                                       |  |
-| |                   .-------------------|  |
+| |                   +-------------------|  |
 | |                   |        CRC        |  /
 | |-------------------+-------------------|
 | |                entries                |  \
 | |                                       |  |
 | |                                       |  +-- 2nd commit
-| |    .-------------------+--------------|  |
+| |    +-------------------+--------------|  |
 | |    |        CRC        |    padding   |  /
 | |----+-------------------+--------------|
 | |                entries                |  \
 | |                                       |  |
 | |                                       |  +-- 3rd commit
-| |         .-------------------+---------|  |
+| |         +-------------------+---------|  |
 | |         |        CRC        |         |  /
-| |---------+-------------------'         |
+| |---------+-------------------+         |
 | |           unwritten storage           |  more commits
 | |                                       |       |
 | |                                       |       v
@@ -154,36 +154,36 @@ Here's a more complete example of metadata block containing 4 entries:
 | |                                       |        |
 | |-------------------+-------------------|        |
 | |      tag AxB      |       data B      | <--.   |
-| |-------------------'                   |    |   |
+| |-------------------+                   |    |   |
 | |                                       |    |   +-- 1st commit
-| |         .-------------------+---------|    |   |
+| |         +-------------------+---------|    |   |
 | |         |      tag BxC      |         | <-.|   |
-| |---------+-------------------'         |   ||   |
+| |---------+-------------------+         |   ||   |
 | |                 data C                |   ||   |
 | |                                       |   ||   |
 | |-------------------+-------------------|   ||   |
 | |     tag CxCRC     |        CRC        |   ||   /
 | |-------------------+-------------------|   ||    
 | |     tag CRCxA'    |      data A'      |   ||   \
-| |-------------------'                   |   ||   |
+| |-------------------+                   |   ||   |
 | |                                       |   ||   |
-| |              .-------------------+----|   ||   +-- 2nd commit
+| |              +-------------------+----|   ||   +-- 2nd commit
 | |              |     tag CRCxA'    |    |   ||   |
 | |--------------+-------------------+----|   ||   |
 | | CRC          |        padding         |   ||   /
 | |--------------+----+-------------------|   ||    
 | |     tag CRCxA''   |      data A''     | <---.  \
-| |-------------------'                   |   |||  |
+| |-------------------+                   |   |||  |
 | |                                       |   |||  |
-| |         .-------------------+---------|   |||  |
+| |         +-------------------+---------|   |||  |
 | |         |     tag A''xD     |         | < |||  |
-| |---------+-------------------'         |  ||||  +-- 3rd commit
+| |---------+-------------------+         |  ||||  +-- 3rd commit
 | |                data D                 |  ||||  |
-| |                             .---------|  ||||  |
+| |                             +---------|  ||||  |
 | |                             |   tag Dx|  ||||  |
 | |---------+-------------------+---------|  ||||  |
 | |CRC      |        CRC        |         |  ||||  /
-| |---------+-------------------'         |  ||||   
+| |---------+-------------------+         |  ||||   
 | |           unwritten storage           |  ||||  more commits
 | |                                       |  ||||       |
 | |                                       |  ||||       v              
@@ -309,13 +309,14 @@ can not be reassigned without deleting the file.
 Layout of the name tag:
 
 ```
-[--      32       --]
-[v| 0xx | id | size ]
-.-------------------.
-|     file name     |
-|                   |
-|                   |
-'-------------------'
+        tag                          data
+[--      32      --][---        variable length        ---]
+[1| 3| 8 | 10 | 10 ][---            (size)             ---]
+ ^  ^  ^    ^    ^- size               ^- file name
+ |  |  |    '------ id
+ |  |  '----------- file type
+ |  '-------------- type1 (0x0)
+ '----------------- valid bit
 ```
 
 Name fields:
@@ -383,26 +384,32 @@ configuration information.
 Layout of the superblock name tag and inline-struct tag:
 
 ```
-[--      32       --]
-[v| 0ff | 000 | 008 ]
-.-------------------.
-|   magic string    |
-|    "littlefs"     |
-'-------------------'
-[v| 201 | 000 | 018 ]
-.-------------------.
-|      version      |
-|-------------------|
-|    block size     |
-|-------------------|
-|    block count    |
-|-------------------|
-|     name max      |
-|-------------------|
-|     file max      |
-|-------------------|
-|     attr max      |
-'-------------------'
+        tag                          data
+[--      32      --][--      32      --|--      32      --]
+[1|- 11 -| 10 | 10 ][---              64               ---]
+ ^    ^     ^    ^- size (8)           ^- magic string ("littlefs")
+ |    |     '------ id (0)
+ |    '------------ type (0x0ff)
+ '----------------- valid bit
+
+        tag                          data
+[--      32      --][--      32      --|--      32      --]
+[1|- 11 -| 10 | 10 ][--      32      --|--      32      --]
+ ^    ^     ^    ^            ^- version         ^- block size
+ |    |     |    '- size (24)
+ |    |     '------ id (0)
+ |    '------------ type (0x201)
+ '----------------- valid bit
+
+                        data (cont)
+[--      32      --|--      32      --|--      32      --]
+[--      32      --|--      32      --|--      32      --]
+          ^- block count     ^- name max        ^- file max
+
+     data (cont)
+[--      32      --]
+[--      32      --]
+          ^- attr max
 ```
 
 Superblock fields:
@@ -489,12 +496,13 @@ which is described below.
 Layout of the dir-struct tag:
 
 ```
-[--      32       --]
-[v| 200 | id  | 008 ]
-.-------------------.
-|   metadata pair   |
-|                   |
-'-------------------'
+        tag                          data
+[--      32      --][--      32      --|--      32      --]
+[1|- 11 -| 10 | 10 ][---              64               ---]
+ ^    ^     ^    ^- size (8)           ^- metadata pair
+ |    |     '------ id
+ |    '------------ type (0x200)
+ '----------------- valid bit
 ```
 
 Dir-struct fields:
@@ -515,13 +523,13 @@ case, the file data is stored directly in the tag's data area.
 Layout of the inline-struct tag:
 
 ```
-[--      32       --]
-[v| 201 | id | size ]
-.-------------------.
-|    inline data    |
-|                   |
-|                   |
-'-------------------'
+        tag                          data
+[--      32      --][---        variable length        ---]
+[1|- 11 -| 10 | 10 ][---            (size)             ---]
+ ^    ^     ^    ^- size               ^- inline data
+ |    |     '------ id
+ |    '------------ type (0x201)
+ '----------------- valid bit
 ```
 
 Inline-struct fields:
@@ -567,13 +575,15 @@ in a minimum block size of 104 bytes.
 Layout of the CTZ-struct tag:
 
 ```
-[--      32       --]
-[v| 202 | id  | 008 ]
-.-------------------.
-|     file head     |
-|-------------------|
-|     file size     |
-'-------------------'
+        tag                          data
+[--      32      --][--      32      --|--      32      --]
+[1|- 11 -| 10 | 10 ][--      32      --|--      32      --]
+ ^    ^     ^    ^            ^                  ^- file size
+ |    |     |    |            '-------------------- file head
+ |    |     |    '- size (8)
+ |    |     '------ id
+ |    '------------ type (0x202)
+ '----------------- valid bit
 ```
 
 CTZ-struct fields:
@@ -606,13 +616,14 @@ implementation should work with any user attributes missing.
 Layout of the user-attr tag:
 
 ```
-[--      32       --]
-[v| 3xx | id | size ]
-.-------------------.
-|     attr data     |
-|                   |
-|                   |
-'-------------------'
+        tag                          data
+[--      32      --][---        variable length        ---]
+[1| 3| 8 | 10 | 10 ][---            (size)             ---]
+ ^  ^  ^    ^    ^- size               ^- attr data
+ |  |  |    '------ id
+ |  |  '----------- attr type
+ |  '-------------- type1 (0x3)
+ '----------------- valid bit
 ```
 
 User-attr fields:
@@ -675,12 +686,14 @@ be ignored if littlefs is mounted read-only.
 Layout of the tail tag:
 
 ```
-[--      32       --]
-[v| 6xx | id  | 008 ]
-.-------------------.
-|   metadata pair   |
-|                   |
-'-------------------'
+        tag                          data
+[--      32      --][--      32      --|--      32      --]
+[1| 3| 8 | 10 | 10 ][---              64               ---]
+ ^  ^  ^   ^    ^- size (8)            ^- metadata pair
+ |  |  |   '------ id
+ |  |  '---------- tail type
+ |  '------------- type1 (0x6)
+ '---------------- valid bit
 ```
 
 Tail fields:
@@ -770,14 +783,18 @@ reliably. The exact cases to check for are described above in the tail tag.
 Layout of the move state:
 
 ```
-[--      32       --]
-[v| 7ff  | id | 008 ]
-.-------------------.
-|s| type | id | 000 |
-|-------------------|
-|   metadata pair   |
-|                   |
-'-------------------'
+        tag                                    data
+[--      32      --][--      32      --|--      32      --|--      32      --]
+[1|- 11 -| 10 | 10 ][1|- 11 -| 10 | 10 |---              64               ---]
+ ^    ^     ^    ^   ^    ^     ^    ^- padding (0)       ^- metadata pair
+ |    |     |    |   |    |     '------ move id
+ |    |     |    |   |    '------------ move type
+ |    |     |    |   '----------------- sync bit
+ |    |     |    |
+ |    |     |    '- size (12)
+ |    |     '------ id (0x3ff)
+ |    '------------ type (0x7ff)
+ '----------------- valid bit
 ```
 
 Move state fields:
@@ -827,14 +844,15 @@ will be detected as invalid.
 Layout of the CRC tag:
 
 ```
-[--      32       --]
-[v| 5xx | id | size ]
-.-------------------.
-|        CRC        |
-|-------------------|
-|      padding      |
-|                   |
-'-------------------'
+        tag                                    data
+[--      32      --][--      32      --|---        variable length        ---]
+[1| 3| 8 | 10 | 10 ][--      32      --|---            (size)             ---]
+ ^  ^  ^    ^    ^            ^- crc                      ^- padding
+ |  |  |    |    '- size (12)
+ |  |  |    '------ id (0x3ff)
+ |  |  '----------- valid state
+ |  '-------------- type1 (0x5)
+ '----------------- valid bit
 ```
 
 CRC fields:
@@ -856,579 +874,3 @@ CRC fields:
   the contents.
 
 ---
-
-# TODO RM below me
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## Metadata tags
-
-These tag+data pairs describe every type of metadata used in littlefs.
-
-
-
-
-
-
-
-
-
-
-
-<table>
-<tr>
-<th>Name</th>
-<th>Size</th>
-<th>Description</th>
-</tr>
-<tr>
-<td>Revision&nbsp;count</td>
-<td>32&nbsp;bits</td>
-<td>Incremented every erase cycle. If both blocks contain valid commits, only the block with the most recent revision count should be used. Sequence comparison must be used to avoid issues with integer overflow.</td>
-</tr>
-<tr>
-<td>CRC</td>
-<td>32&nbsp;bits</td>
-<td>Detects corruption from power-loss or other write issues. Uses the standard CRC-32, which uses a polynomial of 0x04c11db7, initialized with 0xffffffff.</td>
-</tr>
-</table>
-
-
-
-
-<table>
-<tr>
-
-| name           | size            | description                |
-|----------------|-----------------|----------------------------|
-| revision count | 32 bits         | Incremented every erase cycle. If both blocks contain valid commits, the block with the highest                           |
-| entries        | variable length | 
-| CRC            | 32 bits         |                            |
-| 
-
-<table>
-<tr>
-<th>Name</th>
-<th>Size</th>
-<th>Description</th>
-</tr>
-<tr>
-<td>Revision count</td>
-<td>32 bits</td>
-<td>Incremented every erase cycle. If both blocks contain valid commits, only
-the block with the most recent revision count should be used. Sequence
-comparison must be used to avoid issues with integer overflow.</td>
-</tr>
-<tr>
-<td>entries</td>
-<td>variable length</td>
-<td>Variable number of entries containing metadata related to the
-file-system.</td>
-</tr>
-<tr>
-<td>CRC</td>
-<td>32 bits</td>
-<td>Detects corruption from power-loss or other write issues. Uses the standard
-CRC-32, which uses a polynomial of 0x04c11db7, initialized with
-0xffffffff.</td>
-</tr>
-</table>
-
-
-
-
-
-
-
-Each metadata block 
-
-Each metadata block is an appendable log 
-
-
-
-Metadata block structure:
-
-| name           | size            | description                |
-|----------------|-----------------|----------------------------|
-| revision count | 32 bits         |                            |
-| commits        | variable length |                            |
-
-Metadata commit structure:
-
-| name           | size            | description                |
-|----------------|-----------------|----------------------------|
-| entries        | variable length |                            |
-| crc            | 32 bits         |                            |
-
-Metadata entry structure:
-
-| name           | size            | description                |
-|----------------|-----------------|----------------------------|
-| tag            | 32 bits         |                            |
-| data           | variable length |                            |
-
-
-
-
-
-| tags           | variable length | 
-| crc            | 32 bits         |
-
-
-
-
-
-| offset  | size                   | description                |
-|---------|------------------------|----------------------------|
-| 0x0     | 8 bits                 | entry type                 |
-| 0x1     | 8 bits                 | entry length               |
-| 0x2     | 8 bits                 | attribute length           |
-| 0x3     | 8 bits                 | name length                |
-| 0x4     | entry length bytes     | entry-specific data        |
-| 0x4+e   | attribute length bytes | system-specific attributes |
-| 0x4+e+a | name length bytes      | entry name                 |
-
-
-
-
-
-
-
-
-
-```
-.----+----+----+----+----+----+----+----.
-|  revision count   |      tag ~A       |        \
-+----+----+----+----+----+----+----+----+        |
-|                 data A                |        |
-|                                       |        |
-+----+----+----+----+----+----+----+----+        |
-|      tag AxB      |       data B      | <--\   |
-+----+----+----+----+                   |    |   |
-|                                       |    |   +-- 1st commit
-|         +----+----+----+----+----+----+    |   |
-|         |      tag BxC      |         | <-\|   |
-+----+----+----+----+----+----+         |   ||   |
-|                 data C                |   ||   |
-|                                       |   ||   |
-+----+----+----+----+----+----+----+----+   ||   |
-|     tag CxCRC     |        CRC        |   ||   /
-+----+----+----+----+----+----+----+----+   ||    
-|     tag CRCxA'    |      data A'      |   ||   \
-+----+----+----+----+                   |   ||   |
-|                                       |   ||   |
-|              +----+----+----+----+----+   ||   +-- 2nd commit
-|              |     tag CRCxA'    |    |   ||   |
-+----+----+----+----+----+----+----+----+   ||   |
-| CRC          |        padding         |   ||   /
-+----+----+----+----+----+----+----+----+   ||    
-|     tag CRCxA''   |      data A''     | <---\  \
-+----+----+----+----+                   |   |||  |
-|                                       |   |||  |
-|         +----+----+----+----+----+----+   |||  |
-|         |     tag A''xD     |         | < |||  |
-+----+----+----+----+----+----+         |  ||||  +-- 3rd commit
-|                data D                 |  ||||  |
-|                             +----+----+  ||||  |
-|                             |   tag Dx|  ||||  |
-+----+----+----+----+----+----+----+----+  ||||  |
-|CRC      |        CRC        |         |  ||||  /
-+----+----+----+----+----+----+         |  ||||   
-|           unwritten storage           |  ||||  more commits
-|                                       |  ||||       |
-|                                       |  ||||       v              
-|                                       |  ||||   
-|                                       |  |||| 
-'----+----+----+----+----+----+----+----'  ||||
-                                           |||\- most recent A
-                                           ||\-- most recent B
-                                           |\--- most recent C
-                                           \---- most recent D
-```
-
-
-```
-[--     32     --|--     32     --|--          ??           --|
-[ revision count |      tag       |           data            |      tag       |
-
-
-
-```
-
-
-```
-.----+----+----+----+----+----+----+----. 
-|  revision count   |        tags       |  \
-+----+----+----+----+                   |  |
-|                                       |  |
-|                                       |  +-- 1st commit
-|                                       |  |
-|         +----+----+----+----+----+----+
-|         |        CRC        | padding |  /
-+----+----+----+----+----+----+----+----+
-|        tags                           |  \
-|                                       |  |
-|                                       |  +-- 2nd commit
-|                   +----+----+----+----+  |
-|                   |        CRC        |  /
-+----+----+----+----+----+----+----+----+
-|        tags                           |  \
-|                                       |  |
-|                                       |  +-- 3rd commit
-|                   +----+----+----+----|  |
-|                   |        CRC        |  /
-+----+----+----+----+----+----+----+----+
-|                padding                |  more commits 
-|                                       |       |
-|                                       |       v
-|                                       |
-|                                       |
-'----+----+----+----+----+----+----+----'
-```
-
-
-
-Here's the layout of metadata blocks on disk:
-
-| offset | size          | description    |
-|--------|---------------|----------------|
-| 0x00   | 32 bits       | revision count |
-| 0x04   | 32 bits       | dir size       |
-| 0x08   | 64 bits       | tail pointer   |
-| 0x10   | size-16 bytes | dir entries    |
-| 0x00+s | 32 bits       | CRC            |
-
-**Revision count** - Incremented every update, only the uncorrupted
-metadata block with the most recent revision count contains the valid metadata.
-Comparison between revision counts must use sequence comparison since the
-revision counts may overflow.
-
-**Dir size** - Size in bytes of the contents in the current metadata block,
-including the metadata pair metadata. Additionally, the highest bit of the
-dir size may be set to indicate that the directory's contents continue on the
-next metadata pair pointed to by the tail pointer.
-
-**Tail pointer** - Pointer to the next metadata pair in the filesystem.
-A null pair-pointer (0xffffffff, 0xffffffff) indicates the end of the list.
-If the highest bit in the dir size is set, this points to the next
-metadata pair in the current directory, otherwise it points to an arbitrary
-metadata pair. Starting with the superblock, the tail-pointers form a
-linked-list containing all metadata pairs in the filesystem.
-
-**CRC** - 32 bit CRC used to detect corruption from power-lost, from block
-end-of-life, or just from noise on the storage bus. The CRC is appended to
-the end of each metadata block. The littlefs uses the standard CRC-32, which
-uses a polynomial of 0x04c11db7, initialized with 0xffffffff.
-
-Here's an example of a simple directory stored on disk:
-```
-(32 bits) revision count = 10                    (0x0000000a)
-(32 bits) dir size       = 154 bytes, end of dir (0x0000009a)
-(64 bits) tail pointer   = 37, 36                (0x00000025, 0x00000024)
-(32 bits) CRC            = 0xc86e3106
-
-00000000: 0a 00 00 00 9a 00 00 00 25 00 00 00 24 00 00 00  ........%...$...
-00000010: 22 08 00 03 05 00 00 00 04 00 00 00 74 65 61 22  "...........tea"
-00000020: 08 00 06 07 00 00 00 06 00 00 00 63 6f 66 66 65  ...........coffe
-00000030: 65 22 08 00 04 09 00 00 00 08 00 00 00 73 6f 64  e"...........sod
-00000040: 61 22 08 00 05 1d 00 00 00 1c 00 00 00 6d 69 6c  a"...........mil
-00000050: 6b 31 22 08 00 05 1f 00 00 00 1e 00 00 00 6d 69  k1"...........mi
-00000060: 6c 6b 32 22 08 00 05 21 00 00 00 20 00 00 00 6d  lk2"...!... ...m
-00000070: 69 6c 6b 33 22 08 00 05 23 00 00 00 22 00 00 00  ilk3"...#..."...
-00000080: 6d 69 6c 6b 34 22 08 00 05 25 00 00 00 24 00 00  milk4"...%...$..
-00000090: 00 6d 69 6c 6b 35 06 31 6e c8                    .milk5.1n.
-```
-
-A note about the tail pointer linked-list: Normally, this linked-list is
-threaded through the entire filesystem. However, after power-loss this
-linked-list may become out of sync with the rest of the filesystem.
-- The linked-list may contain a directory that has actually been removed
-- The linked-list may contain a metadata pair that has not been updated after
-  a block in the pair has gone bad.
-
-The threaded linked-list must be checked for these errors before it can be
-used reliably. Fortunately, the threaded linked-list can simply be ignored
-if littlefs is mounted read-only.
-
-## Entries
-
-Each metadata block contains a series of entries that follow a standard
-layout. An entry contains the type of the entry, along with a section for
-entry-specific data, attributes, and a name.
-
-Here's the layout of entries on disk:
-
-| offset  | size                   | description                |
-|---------|------------------------|----------------------------|
-| 0x0     | 8 bits                 | entry type                 |
-| 0x1     | 8 bits                 | entry length               |
-| 0x2     | 8 bits                 | attribute length           |
-| 0x3     | 8 bits                 | name length                |
-| 0x4     | entry length bytes     | entry-specific data        |
-| 0x4+e   | attribute length bytes | system-specific attributes |
-| 0x4+e+a | name length bytes      | entry name                 |
-
-**Entry type** - Type of the entry, currently this is limited to the following:
-- 0x11 - file entry
-- 0x22 - directory entry
-- 0x2e - superblock entry
-
-Additionally, the type is broken into two 4 bit nibbles, with the upper nibble
-specifying the type's data structure used when scanning the filesystem. The
-lower nibble clarifies the type further when multiple entries share the same
-data structure.
-
-The highest bit is reserved for marking the entry as "moved". If an entry
-is marked as "moved", the entry may also exist somewhere else in the
-filesystem. If the entry exists elsewhere, this entry must be treated as
-though it does not exist.
-
-**Entry length** - Length in bytes of the entry-specific data. This does
-not include the entry type size, attributes, or name. The full size in bytes
-of the entry is 4 + entry length + attribute length + name length.
-
-**Attribute length** - Length of system-specific attributes in bytes. Since
-attributes are system specific, there is not much guarantee on the values in
-this section, and systems are expected to work even when it is empty. See the
-[attributes](#entry-attributes) section for more details.
-
-**Name length** - Length of the entry name. Entry names are stored as UTF8,
-although most systems will probably only support ASCII. Entry names can not
-contain '/' and can not be '.' or '..' as these are a part of the syntax of
-filesystem paths.
-
-Here's an example of a simple entry stored on disk:
-```
-(8 bits)   entry type       = file     (0x11)
-(8 bits)   entry length     = 8 bytes  (0x08)
-(8 bits)   attribute length = 0 bytes  (0x00)
-(8 bits)   name length      = 12 bytes (0x0c)
-(8 bytes)  entry data       = 05 00 00 00 20 00 00 00
-(12 bytes) entry name       = smallavacado
-
-00000000: 11 08 00 0c 05 00 00 00 20 00 00 00 73 6d 61 6c  ........ ...smal
-00000010: 6c 61 76 61 63 61 64 6f                          lavacado
-```
-
-## Superblock
-
-The superblock is the anchor for the littlefs. The superblock is stored as
-a metadata pair containing a single superblock entry. It is through the
-superblock that littlefs can access the rest of the filesystem.
-
-The superblock can always be found in blocks 0 and 1, however fetching the
-superblock requires knowing the block size. The block size can be guessed by
-searching the beginning of disk for the string "littlefs", although currently
-the filesystems relies on the user providing the correct block size.
-
-The superblock is the most valuable block in the filesystem. It is updated
-very rarely, only during format or when the root directory must be moved. It
-is encouraged to always write out both superblock pairs even though it is not
-required.
-
-Here's the layout of the superblock entry:
-
-| offset | size                   | description                            |
-|--------|------------------------|----------------------------------------|
-| 0x00   | 8 bits                 | entry type (0x2e for superblock entry) |
-| 0x01   | 8 bits                 | entry length (20 bytes)                |
-| 0x02   | 8 bits                 | attribute length                       |
-| 0x03   | 8 bits                 | name length (8 bytes)                  |
-| 0x04   | 64 bits                | root directory                         |
-| 0x0c   | 32 bits                | block size                             |
-| 0x10   | 32 bits                | block count                            |
-| 0x14   | 32 bits                | version                                |
-| 0x18   | attribute length bytes | system-specific attributes             |
-| 0x18+a | 8 bytes                | magic string ("littlefs")              |
-
-**Root directory** - Pointer to the root directory's metadata pair.
-
-**Block size** - Size of the logical block size used by the filesystem.
-
-**Block count** - Number of blocks in the filesystem.
-
-**Version** - The littlefs version encoded as a 32 bit value. The upper 16 bits
-encodes the major version, which is incremented when a breaking-change is
-introduced in the filesystem specification. The lower 16 bits encodes the
-minor version, which is incremented when a backwards-compatible change is
-introduced. Non-standard Attribute changes do not change the version. This
-specification describes version 1.1 (0x00010001), which is the first version
-of littlefs.
-
-**Magic string** - The magic string "littlefs" takes the place of an entry
-name.
-
-Here's an example of a complete superblock:
-```
-(32 bits) revision count   = 3                    (0x00000003)
-(32 bits) dir size         = 52 bytes, end of dir (0x00000034)
-(64 bits) tail pointer     = 3, 2                 (0x00000003, 0x00000002)
-(8 bits)  entry type       = superblock           (0x2e)
-(8 bits)  entry length     = 20 bytes             (0x14)
-(8 bits)  attribute length = 0 bytes              (0x00)
-(8 bits)  name length      = 8 bytes              (0x08)
-(64 bits) root directory   = 3, 2                 (0x00000003, 0x00000002)
-(32 bits) block size       = 512 bytes            (0x00000200)
-(32 bits) block count      = 1024 blocks          (0x00000400)
-(32 bits) version          = 1.1                  (0x00010001)
-(8 bytes) magic string     = littlefs
-(32 bits) CRC              = 0xc50b74fa
-
-00000000: 03 00 00 00 34 00 00 00 03 00 00 00 02 00 00 00  ....4...........
-00000010: 2e 14 00 08 03 00 00 00 02 00 00 00 00 02 00 00  ................
-00000020: 00 04 00 00 01 00 01 00 6c 69 74 74 6c 65 66 73  ........littlefs
-00000030: fa 74 0b c5                                      .t..
-```
-
-## Directory entries
-
-Directories are stored in entries with a pointer to the first metadata pair
-in the directory. Keep in mind that a directory may be composed of multiple
-metadata pairs connected by the tail pointer when the highest bit in the dir
-size is set.
-
-Here's the layout of a directory entry:
-
-| offset | size                   | description                             |
-|--------|------------------------|-----------------------------------------|
-| 0x0    | 8 bits                 | entry type (0x22 for directory entries) |
-| 0x1    | 8 bits                 | entry length (8 bytes)                  |
-| 0x2    | 8 bits                 | attribute length                        |
-| 0x3    | 8 bits                 | name length                             |
-| 0x4    | 64 bits                | directory pointer                       |
-| 0xc    | attribute length bytes | system-specific attributes              |
-| 0xc+a  | name length bytes      | directory name                          |
-
-**Directory pointer** - Pointer to the first metadata pair in the directory.
-
-Here's an example of a directory entry:
-```
-(8 bits)  entry type        = directory (0x22)
-(8 bits)  entry length      = 8 bytes   (0x08)
-(8 bits)  attribute length  = 0 bytes   (0x00)
-(8 bits)  name length       = 3 bytes   (0x03)
-(64 bits) directory pointer = 5, 4      (0x00000005, 0x00000004)
-(3 bytes) name              = tea
-
-00000000: 22 08 00 03 05 00 00 00 04 00 00 00 74 65 61     "...........tea
-```
-
-## File entries
-
-Files are stored in entries with a pointer to the head of the file and the
-size of the file. This is enough information to determine the state of the
-CTZ skip-list that is being referenced.
-
-How files are actually stored on disk is a bit complicated. The full
-explanation of CTZ skip-lists can be found in [DESIGN.md](DESIGN.md#ctz-skip-lists).
-
-A terribly quick summary: For every nth block where n is divisible by 2^x,
-the block contains a pointer to block n-2^x. These pointers are stored in
-increasing order of x in each block of the file preceding the data in the
-block.
-
-The maximum number of pointers in a block is bounded by the maximum file size
-divided by the block size. With 32 bits for file size, this results in a
-minimum block size of 104 bytes.
-
-Here's the layout of a file entry:
-
-| offset | size                   | description                        |
-|--------|------------------------|------------------------------------|
-| 0x0    | 8 bits                 | entry type (0x11 for file entries) |
-| 0x1    | 8 bits                 | entry length (8 bytes)             |
-| 0x2    | 8 bits                 | attribute length                   |
-| 0x3    | 8 bits                 | name length                        |
-| 0x4    | 32 bits                | file head                          |
-| 0x8    | 32 bits                | file size                          |
-| 0xc    | attribute length bytes | system-specific attributes         |
-| 0xc+a  | name length bytes      | directory name                     |
-
-**File head** - Pointer to the block that is the head of the file's CTZ
-skip-list.
-
-**File size** - Size of file in bytes.
-
-Here's an example of a file entry:
-```
-(8 bits)   entry type       = file     (0x11)
-(8 bits)   entry length     = 8 bytes  (0x08)
-(8 bits)   attribute length = 0 bytes  (0x00)
-(8 bits)   name length      = 12 bytes (0x03)
-(32 bits)  file head        = 543      (0x0000021f)
-(32 bits)  file size        = 256 KB   (0x00040000)
-(12 bytes) name             = largeavacado
-
-00000000: 11 08 00 0c 1f 02 00 00 00 00 04 00 6c 61 72 67  ............larg
-00000010: 65 61 76 61 63 61 64 6f                          eavacado
-```
-
-## Entry attributes
-
-Each dir entry can have up to 256 bytes of system-specific attributes. Since
-these attributes are system-specific, they may not be portable between
-different systems. For this reason, all attributes must be optional. A minimal
-littlefs driver must be able to get away with supporting no attributes at all.
-
-For some level of portability, littlefs has a simple scheme for attributes.
-Each attribute is prefixes with an 8-bit type that indicates what the attribute
-is. The length of attributes may also be determined from this type. Attributes
-in an entry should be sorted based on portability, since attribute parsing
-will end when it hits the first attribute it does not understand.
-
-Each system should choose a 4-bit value to prefix all attribute types with to
-avoid conflicts with other systems. Additionally, littlefs drivers that support
-attributes should provide a "ignore attributes" flag to users in case attribute
-conflicts do occur.
-
-Attribute types prefixes with 0x0 and 0xf are currently reserved for future
-standard attributes. Standard attributes will be added to this document in
-that case.
-
-Here's an example of non-standard time attribute:
-```
-(8 bits)  attribute type  = time       (0xc1)
-(72 bits) time in seconds = 1506286115 (0x0059c81a23)
-
-00000000: c1 23 1a c8 59 00                                .#..Y.
-```
-
-Here's an example of non-standard permissions attribute:
-```
-(8 bits)  attribute type  = permissions (0xc2)
-(16 bits) permission bits = rw-rw-r--   (0x01b4)
-
-00000000: c2 b4 01                                         ...
-```
-
-Here's what a dir entry may look like with these attributes:
-```
-(8 bits)   entry type       = file         (0x11)
-(8 bits)   entry length     = 8 bytes      (0x08)
-(8 bits)   attribute length = 9 bytes      (0x09)
-(8 bits)   name length      = 12 bytes     (0x0c)
-(8 bytes)  entry data       = 05 00 00 00 20 00 00 00
-(8 bits)   attribute type   = time         (0xc1)
-(72 bits)  time in seconds  = 1506286115   (0x0059c81a23)
-(8 bits)   attribute type   = permissions  (0xc2)
-(16 bits)  permission bits  = rw-rw-r--    (0x01b4)
-(12 bytes) entry name       = smallavacado
-
-00000000: 11 08 09 0c 05 00 00 00 20 00 00 00 c1 23 1a c8  ........ ....#..
-00000010: 59 00 c2 b4 01 73 6d 61 6c 6c 61 76 61 63 61 64  Y....smallavacad
-00000020: 6f                                               o
-```
